@@ -135,13 +135,12 @@ Azure OpenAI와 Streamlit을 활용하여 **번호이동정산 데이터 분석 
 
 `사용자 입력: "2024년 1월 A통신사 포트인 정산 금액 알려줘"
 AI 응답: 다음 쿼리를 생성했습니다.
-
-SELECT SUM(settlement_amount) as total_amount
-FROM provisional_receipt 
-WHERE YEAR(transaction_date) = 2024 
-  AND MONTH(transaction_date) = 1 
-  AND operator_name = 'A통신사' 
-  AND port_type = 'PORT_IN'`
+  SELECT SUM(settlement_amount) as total_amount
+  FROM provisional_receipt 
+  WHERE YEAR(transaction_date) = 2024 
+    AND MONTH(transaction_date) = 1 
+    AND operator_name = 'A통신사' 
+    AND port_type = 'PORT_IN'`
 
 **결과**: 자동 생성된 쿼리로 즉시 정산 금액 확인 가능
 
@@ -153,19 +152,18 @@ WHERE YEAR(transaction_date) = 2024
 
 `사용자 입력: "010-1234-5678 번호 정산 내역 확인해줘"
 AI 응답: 번호이동 정산 검증 쿼리를 생성했습니다.
-
-SELECT 
-    h.phone_number,
-    h.service_contract_id,
-    h.port_type,
-    h.transaction_date,
-    p.settlement_amount as provisional_amount,
-    d.deposit_amount,
-    (p.settlement_amount - d.deposit_amount) as net_settlement
-FROM number_port_history h
-LEFT JOIN provisional_receipt p ON h.transaction_id = p.transaction_id
-LEFT JOIN deposit_account d ON h.service_contract_id = d.service_contract_id
-WHERE h.phone_number = '010-1234-5678'`
+  SELECT 
+      h.phone_number,
+      h.service_contract_id,
+      h.port_type,
+      h.transaction_date,
+      p.settlement_amount as provisional_amount,
+      d.deposit_amount,
+      (p.settlement_amount - d.deposit_amount) as net_settlement
+  FROM number_port_history h
+  LEFT JOIN provisional_receipt p ON h.transaction_id = p.transaction_id
+  LEFT JOIN deposit_account d ON h.service_contract_id = d.service_contract_id
+  WHERE h.phone_number = '010-1234-5678'`
 
 **결과**: 가수납-예치금 차액 계산으로 정산 정확성 즉시 검증
 
@@ -177,29 +175,28 @@ WHERE h.phone_number = '010-1234-5678'`
 
 `사용자 입력: "이번 달 정산 금액이 평소보다 많이 증가한 사업자 찾아줘"
 AI 응답: 월별 사업자 정산 증가율 분석 쿼리를 생성했습니다.
-
-WITH monthly_summary AS (
-    SELECT 
-        operator_name,
-        YEAR(transaction_date) as year,
-        MONTH(transaction_date) as month,
-        SUM(settlement_amount) as monthly_amount
-    FROM provisional_receipt 
-    WHERE transaction_date >= DATEADD(month, -3, GETDATE())
-    GROUP BY operator_name, YEAR(transaction_date), MONTH(transaction_date)
-),
-growth_analysis AS (
-    SELECT 
-        operator_name,
-        monthly_amount,
-        LAG(monthly_amount) OVER (PARTITION BY operator_name ORDER BY year, month) as prev_amount,
-        ((monthly_amount - LAG(monthly_amount) OVER (PARTITION BY operator_name ORDER BY year, month)) / LAG(monthly_amount) OVER (PARTITION BY operator_name ORDER BY year, month)) * 100 as growth_rate
-    FROM monthly_summary
-)
-SELECT operator_name, monthly_amount, prev_amount, growth_rate
-FROM growth_analysis 
-WHERE growth_rate > 50
-ORDER BY growth_rate DESC`
+  WITH monthly_summary AS (
+      SELECT 
+          operator_name,
+          YEAR(transaction_date) as year,
+          MONTH(transaction_date) as month,
+          SUM(settlement_amount) as monthly_amount
+      FROM provisional_receipt 
+      WHERE transaction_date >= DATEADD(month, -3, GETDATE())
+      GROUP BY operator_name, YEAR(transaction_date), MONTH(transaction_date)
+  ),
+  growth_analysis AS (
+      SELECT 
+          operator_name,
+          monthly_amount,
+          LAG(monthly_amount) OVER (PARTITION BY operator_name ORDER BY year, month) as prev_amount,
+          ((monthly_amount - LAG(monthly_amount) OVER (PARTITION BY operator_name ORDER BY year, month)) / LAG(monthly_amount) OVER (PARTITION BY operator_name ORDER BY year, month)) * 100 as growth_rate
+      FROM monthly_summary
+  )
+  SELECT operator_name, monthly_amount, prev_amount, growth_rate
+  FROM growth_analysis 
+  WHERE growth_rate > 50
+  ORDER BY growth_rate DESC`
 
 **결과**: 정산 금액 급증 사업자 리스트 및 증가율 자동 분석
 
