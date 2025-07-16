@@ -1,5 +1,7 @@
 # MS_AI_MVP
 
+# MS AI 프로젝트 제안서
+
 # 📊 자연어 기반 AI SQL 쿼리 생성 시스템 제안서
 
 ## 📌 프로젝트 개요 및 목적
@@ -107,6 +109,99 @@ Azure OpenAI와 Streamlit을 활용하여 **번호이동정산 데이터 분석 
 - 복잡한 조인 쿼리 생성 시 실행 전 확인 단계 추가
 - 쿼리 실행 시간 안내 및 진행 상황 표시
 - 에러 발생 시 사용자 친화적 메시지 제공
+
+## 💼 활용 예시
+
+### 시나리오 1: 월별 번호이동 트렌드 분석
+
+**상황**: 정산 담당자가 최근 3개월간 번호이동 패턴을 확인하고 싶은 경우
+
+**사용법**:
+
+- 시스템 접속 시 화면 상단에 자동으로 표시되는 대시보드 확인
+- 포트인/포트아웃 별도 그래프로 트렌드 비교 분석
+- 건수/금액 기준 필터링으로 세부 분석 가능
+
+**결과**:
+
+- "지난 3개월간 포트인 증가율 15%, 포트아웃 감소율 8% 확인"
+- 월별 변동 패턴을 통한 계절성 분석 가능
+
+### 시나리오 2: 특정 사업자 정산 현황 조회
+
+**상황**: "2024년 1월 A통신사 포트인 정산 금액을 확인하고 싶어요"
+
+**사용법**:
+
+`사용자 입력: "2024년 1월 A통신사 포트인 정산 금액 알려줘"
+AI 응답: 다음 쿼리를 생성했습니다.
+
+SELECT SUM(settlement_amount) as total_amount
+FROM provisional_receipt 
+WHERE YEAR(transaction_date) = 2024 
+  AND MONTH(transaction_date) = 1 
+  AND operator_name = 'A통신사' 
+  AND port_type = 'PORT_IN'`
+
+**결과**: 자동 생성된 쿼리로 즉시 정산 금액 확인 가능
+
+### 시나리오 3: 개별 번호 정산 검증
+
+**상황**: "010-1234-5678 번호의 정산 내역이 정상적으로 처리되었는지 확인하고 싶어요"
+
+**사용법**:
+
+`사용자 입력: "010-1234-5678 번호 정산 내역 확인해줘"
+AI 응답: 번호이동 정산 검증 쿼리를 생성했습니다.
+
+SELECT 
+    h.phone_number,
+    h.service_contract_id,
+    h.port_type,
+    h.transaction_date,
+    p.settlement_amount as provisional_amount,
+    d.deposit_amount,
+    (p.settlement_amount - d.deposit_amount) as net_settlement
+FROM number_port_history h
+LEFT JOIN provisional_receipt p ON h.transaction_id = p.transaction_id
+LEFT JOIN deposit_account d ON h.service_contract_id = d.service_contract_id
+WHERE h.phone_number = '010-1234-5678'`
+
+**결과**: 가수납-예치금 차액 계산으로 정산 정확성 즉시 검증
+
+### 시나리오 4: 이상 징후 탐지
+
+**상황**: "최근 정산 금액이 급증한 사업자가 있는지 확인하고 싶어요"
+
+**사용법**:
+
+`사용자 입력: "이번 달 정산 금액이 평소보다 많이 증가한 사업자 찾아줘"
+AI 응답: 월별 사업자 정산 증가율 분석 쿼리를 생성했습니다.
+
+WITH monthly_summary AS (
+    SELECT 
+        operator_name,
+        YEAR(transaction_date) as year,
+        MONTH(transaction_date) as month,
+        SUM(settlement_amount) as monthly_amount
+    FROM provisional_receipt 
+    WHERE transaction_date >= DATEADD(month, -3, GETDATE())
+    GROUP BY operator_name, YEAR(transaction_date), MONTH(transaction_date)
+),
+growth_analysis AS (
+    SELECT 
+        operator_name,
+        monthly_amount,
+        LAG(monthly_amount) OVER (PARTITION BY operator_name ORDER BY year, month) as prev_amount,
+        ((monthly_amount - LAG(monthly_amount) OVER (PARTITION BY operator_name ORDER BY year, month)) / LAG(monthly_amount) OVER (PARTITION BY operator_name ORDER BY year, month)) * 100 as growth_rate
+    FROM monthly_summary
+)
+SELECT operator_name, monthly_amount, prev_amount, growth_rate
+FROM growth_analysis 
+WHERE growth_rate > 50
+ORDER BY growth_rate DESC`
+
+**결과**: 정산 금액 급증 사업자 리스트 및 증가율 자동 분석
 
 ## 🎯 기대 효과
 
