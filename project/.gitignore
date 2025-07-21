@@ -1,44 +1,32 @@
-# 환경 변수 및 설정 파일
+# .gitignore - 번호이동정산 AI 분석 시스템
+# Git 저장소에 포함하지 않을 파일들
+
+# =============================================================================
+# 환경 설정 파일 (민감한 정보 포함)
+# =============================================================================
 .env
 .env.local
 .env.production
 .env.staging
-config.py
-config.json
-secrets.json
-settings.py
-local_settings.py
+.env.development
+*.env
 
-# API 키 및 인증 파일
-*api_key*
-*secret*
-*password*
-*credentials*
-*.pem
-*.key
-*.p12
-*.pfx
-auth.json
-token.json
+# Azure 설정 파일
+azure-credentials.json
+azure-config.json
 
-# Azure 관련 설정 파일
-.azure/
-azure.conf
-azure_config.json
-connection_strings.json
-app_settings.json
-
-# 데이터베이스 설정
-database.conf
-db_config.py
-connection.py
-*connection_string*
-
+# =============================================================================
 # Python 관련
+# =============================================================================
+# Byte-compiled / optimized / DLL files
 __pycache__/
 *.py[cod]
 *$py.class
+
+# C extensions
 *.so
+
+# Distribution / packaging
 .Python
 build/
 develop-eggs/
@@ -58,90 +46,417 @@ share/python-wheels/
 *.egg
 MANIFEST
 
-# 가상환경
-venv/
-ENV/
-env/
-.venv/
-.ENV/
-.env/
-pipenv/
-Pipfile.lock
+# PyInstaller
+*.manifest
+*.spec
 
-# IDE 설정
-.vscode/
-.idea/
-*.swp
-*.swo
-*~
-.DS_Store
-Thumbs.db
+# Installer logs
+pip-log.txt
+pip-delete-this-directory.txt
 
-# Jupyter Notebook
-.ipynb_checkpoints
-
-# 로그 파일
-*.log
-logs/
-log/
-
-# 임시 파일
-temp/
-tmp/
-*.tmp
-*.temp
-*.cache
-
-# Streamlit 캐시
-.streamlit/
-
-# 백업 파일
-*.bak
-*.backup
-*.old
-
-# 사용자 업로드 파일
-uploads/
-files/
-data/local/
-*.csv
-*.xlsx
-*.xls
-!sample_data.csv
-
-# 테스트 관련
-.pytest_cache/
-.coverage
+# Unit test / coverage reports
 htmlcov/
 .tox/
+.nox/
+.coverage
+.coverage.*
 .cache
 nosetests.xml
 coverage.xml
 *.cover
+*.py,cover
 .hypothesis/
+.pytest_cache/
+cover/
 
-# OS 관련
-.DS_Store
-.DS_Store?
-._*
-.Spotlight-V100
-.Trashes
-ehthumbs.db
-Thumbs.db
+# Translations
+*.mo
+*.pot
 
-# 문서화
+# Django stuff
+*.log
+local_settings.py
+db.sqlite3
+db.sqlite3-journal
+
+# Flask stuff
+instance/
+.webassets-cache
+
+# Scrapy stuff
+.scrapy
+
+# Sphinx documentation
 docs/_build/
 
-# 개발용 스크립트
-dev_*
-test_*
-debug_*
-local_*
+# PyBuilder
+.pybuilder/
+target/
 
-# SSL 인증서
+# Jupyter Notebook
+.ipynb_checkpoints
+
+# IPython
+profile_default/
+ipython_config.py
+
+# pyenv
+.python-version
+
+# pipenv
+Pipfile.lock
+
+# poetry
+poetry.lock
+
+# pdm
+.pdm.toml
+
+# PEP 582
+__pypackages__/
+
+# Celery stuff
+celerybeat-schedule
+celerybeat.pid
+
+# SageMath parsed files
+*.sage.py
+
+# Environments
+.env
+.venv
+env/
+venv/
+ENV/
+env.bak/
+venv.bak/
+
+# Spyder project settings
+.spyderproject
+.spyproject
+
+# Rope project settings
+.ropeproject
+
+# mkdocs documentation
+/site
+
+# mypy
+.mypy_cache/
+.dmypy.json
+dmypy.json
+
+# Pyre type checker
+.pyre/
+
+# pytype static type analyzer
+.pytype/
+
+# Cython debug symbols
+cython_debug/
+
+# =============================================================================
+# 로그 및 임시 파일
+# =============================================================================
+# 로그 파일들
+logs/
+*.log
+*.log.*
+
+# 임시 파일들
+temp/
+tmp/
+*.tmp
+*.temp
+*.swp
+*.swo
+*~
+
+# 백업 파일들
+*.bak
+*.backup
+*.old
+
+# =============================================================================
+# 데이터베이스 및 데이터 파일
+# =============================================================================
+# 로컬 데이터베이스 파일
+*.db
+*.sqlite
+*.sqlite3
+*.db-journal
+
+# 데이터 파일들 (민감한 실제 데이터)
+data/
+datasets/
+*.csv
+*.xlsx
+*.xls
+*.json
+!sample_data.json  # 샘플 데이터는 포함
+!requirements.txt  # requirements는 포함
+
+# 데이터베이스 덤프
+*.sql
+*.dump
+
+# =============================================================================
+# IDE 및 에디터 설정
+# =============================================================================
+# Visual Studio Code
+.vscode/
+!.vscode/settings.json
+!.vscode/tasks.json
+!.vscode/launch.json
+!.vscode/extensions.json
+!.vscode/*.code-snippets
+
+# PyCharm
+.idea/
+*.iws
+*.iml
+*.ipr
+
+# Sublime Text
+*.sublime-project
+*.sublime-workspace
+
+# Vim
+*.swp
+*.swo
+
+# Emacs
+*~
+\#*\#
+/.emacs.desktop
+/.emacs.desktop.lock
+*.elc
+auto-save-list
+tramp
+.\#*
+
+# =============================================================================
+# 운영체제 관련
+# =============================================================================
+# Windows
+Thumbs.db
+Thumbs.db:encryptable
+ehthumbs.db
+ehthumbs_vista.db
+*.stackdump
+[Dd]esktop.ini
+$RECYCLE.BIN/
+*.cab
+*.msi
+*.msix
+*.msm
+*.msp
+*.lnk
+
+# macOS
+.DS_Store
+.AppleDouble
+.LSOverride
+Icon
+._*
+.DocumentRevisions-V100
+.fseventsd
+.Spotlight-V100
+.TemporaryItems
+.Trashes
+.VolumeIcon.icns
+.com.apple.timemachine.donotpresent
+.AppleDB
+.AppleDesktop
+Network Trash Folder
+Temporary Items
+.apdisk
+
+# Linux
+*~
+.fuse_hidden*
+.directory
+.Trash-*
+.nfs*
+
+# =============================================================================
+# Streamlit 관련
+# =============================================================================
+# Streamlit 캐시
+.streamlit/
+streamlit_cache/
+
+# Streamlit 설정 (secrets 제외)
+.streamlit/secrets.toml
+.streamlit/config.toml
+
+# =============================================================================
+# Docker 관련
+# =============================================================================
+# Docker 로컬 파일들
+.dockerignore
+docker-compose.override.yml
+docker-compose.local.yml
+
+# =============================================================================
+# Azure 및 클라우드 관련
+# =============================================================================
+# Azure CLI
+.azure/
+
+# Terraform
+*.tfstate
+*.tfstate.*
+.terraform/
+.terraform.lock.hcl
+terraform.tfvars
+terraform.tfvars.json
+
+# =============================================================================
+# 보안 관련 파일
+# =============================================================================
+# 인증서 및 키 파일
+*.pem
+*.key
 *.crt
-*.csr
-*.der
-*.p7b
-*.p7s
-*.spc
+*.cer
+*.p12
+*.pfx
+
+# SSH 키
+id_rsa
+id_rsa.pub
+id_ed25519
+id_ed25519.pub
+
+# API 키 및 토큰
+api_keys.txt
+tokens.txt
+secrets.txt
+
+# =============================================================================
+# 테스트 및 개발 관련
+# =============================================================================
+# 테스트 결과
+test-results/
+test_output/
+htmlcov/
+
+# 프로파일링 결과
+*.prof
+profile_results/
+
+# 벤치마크 결과
+benchmark_results/
+
+# =============================================================================
+# 문서 및 리포트
+# =============================================================================
+# 생성된 문서들
+docs/build/
+docs/_build/
+
+# 리포트 파일들
+reports/
+*.pdf
+*.docx
+*.pptx
+
+# =============================================================================
+# 캐시 및 임시 데이터
+# =============================================================================
+# 일반 캐시
+cache/
+.cache/
+*.cache
+
+# Python 캐시
+__pycache__/
+*.pyc
+
+# Plotly 캐시
+.plotly_cache/
+
+# Pandas 캐시
+.pandas_cache/
+
+# =============================================================================
+# 배포 관련
+# =============================================================================
+# 빌드 결과물
+build/
+dist/
+*.tar.gz
+*.zip
+
+# 배포 설정 (민감한 정보 포함 가능)
+deployment.yml
+production.yml
+staging.yml
+
+# Kubernetes 시크릿
+*-secret.yaml
+*-secrets.yaml
+
+# =============================================================================
+# 모니터링 및 로깅
+# =============================================================================
+# 메트릭 데이터
+metrics/
+monitoring/
+
+# 로그 압축 파일
+*.gz
+*.tar.gz
+*.zip
+
+# =============================================================================
+# 개발 도구
+# =============================================================================
+# Node.js (프론트엔드 도구용)
+node_modules/
+npm-debug.log*
+yarn-debug.log*
+yarn-error.log*
+package-lock.json
+yarn.lock
+
+# =============================================================================
+# 프로젝트 특화 제외 항목
+# =============================================================================
+# 실제 번호이동정산 데이터 (절대 업로드 금지)
+real_data/
+production_data/
+mnp_data/
+settlement_data/
+
+# 개인정보 포함 가능한 파일들
+personal_data/
+customer_info/
+phone_numbers/
+
+# 테스트용 실제 데이터
+test_real_data/
+
+# 설정 백업 파일들
+config_backup/
+*.config.bak
+
+# 임시 SQL 파일들
+temp_queries/
+*.temp.sql
+
+# 개발용 스크립트
+dev_scripts/
+test_scripts/
+
+# =============================================================================
+# 참고사항
+# =============================================================================
+# 이 파일에 포함된 패턴들은 다음을 목적으로 합니다:
+# 1. 민감한 정보 보호 (API 키, 연결 문자열, 개인정보)
+# 2. 개발 환경 파일 제외 (IDE 설정, 로그, 캐시)
+# 3. 빌드 결과물 제외 (바이너리, 압축 파일)
+# 4. 운영체제별 시스템 파일 제외
+# 
+# 새로운 민감한 파일이나 디렉토리가 생기면 이 파일에 추가하세요.
