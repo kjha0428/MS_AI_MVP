@@ -13,10 +13,10 @@ class AzureConfig:
 
     def __init__(self):
         """Azure 설정 초기화"""
-        self.key_vault_url = os.getenv("AZURE_KEY_VAULT_URL")
-        self.tenant_id = os.getenv("AZURE_TENANT_ID")
-        self.client_id = os.getenv("AZURE_CLIENT_ID")
-        self.client_secret = os.getenv("AZURE_CLIENT_SECRET")
+        # self.key_vault_url = os.getenv("AZURE_KEY_VAULT_URL")
+        # self.tenant_id = os.getenv("AZURE_TENANT_ID")
+        # self.client_id = os.getenv("AZURE_CLIENT_ID")
+        # self.client_secret = os.getenv("AZURE_CLIENT_SECRET")
 
         # 로거 설정
         self.logger = logging.getLogger(__name__)

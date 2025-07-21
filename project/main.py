@@ -1,4 +1,4 @@
-# main.py - 번호이동정산 AI 분석 시스템 메인 애플리케이션
+# main.py - 번호이동정산 AI 분석 시스템 메인 애플리케이션 (Azure SQL Database 연동)
 import streamlit as st
 import pandas as pd
 import plotly.express as px
@@ -6,6 +6,12 @@ import plotly.graph_objects as go
 from plotly.subplots import make_subplots
 import re
 from datetime import datetime, timedelta
+import logging
+
+# Azure 설정 및 샘플 데이터 매니저 임포트
+from azure_config import get_azure_config
+from sample_data import SampleDataManager, create_sample_database
+from database_manager import DatabaseManagerFactory
 
 # 샘플 데이터 임포트
 from sample_data import create_sample_database
@@ -83,50 +89,128 @@ st.markdown(
         border-radius: 8px;
         margin: 1rem 0;
     }
+
+    .azure-status {
+        background: linear-gradient(135deg, #0078d4 0%, #106ebe 100%);
+        color: white;
+        padding: 0.8rem;
+        border-radius: 8px;
+        margin: 0.5rem 0;
+        text-align: center;
+        font-weight: 500;
+    }
+    
+    .local-status {
+        background: linear-gradient(135deg, #ffa500 0%, #ff8c00 100%);
+        color: white;
+        padding: 0.8rem;
+        border-radius: 8px;
+        margin: 0.5rem 0;
+        text-align: center;
+        font-weight: 500;
 </style>
 """,
     unsafe_allow_html=True,
 )
 
+# 로깅 설정
+logging.basicConfig(level=logging.INFO)
+logger = logging.getLogger(__name__)
+
 
 # 데이터베이스 초기화
 @st.cache_resource
-def init_database():
-    """샘플 데이터베이스 초기화"""
-    return create_sample_database()
+def init_system():
+    """시스템 초기화 - Azure 설정 및 데이터베이스 연결"""
+    try:
+        # Azure 설정 로드
+        azure_config = get_azure_config()
+
+        # 데이터베이스 매니저 생성
+        db_manager = DatabaseManagerFactory.create_manager(azure_config)
+
+        # 샘플 데이터 매니저 생성
+        sample_manager = SampleDataManager(azure_config)
+
+        # 데이터베이스 연결 생성
+        conn = sample_manager.create_sample_database()
+
+        return {
+            "azure_config": azure_config,
+            "db_manager": db_manager,
+            "sample_manager": sample_manager,
+            "connection": conn,
+            "is_azure": sample_manager.is_using_azure(),
+            "connection_info": sample_manager.get_connection_info(),
+        }
+
+    except Exception as e:
+        logger.error(f"시스템 초기화 실패: {e}")
+        # 폴백: 로컬 모드로 초기화
+        azure_config = get_azure_config()
+        sample_manager = SampleDataManager(azure_config, force_local=True)
+        conn = sample_manager.create_sample_database()
+
+        return {
+            "azure_config": azure_config,
+            "db_manager": None,
+            "sample_manager": sample_manager,
+            "connection": conn,
+            "is_azure": False,
+            "connection_info": sample_manager.get_connection_info(),
+            "fallback": True,
+        }
 
 
-# 대시보드 데이터 조회
-@st.cache_data(ttl=300)  # 5분 캐시
-def get_dashboard_data(_conn):
+# 대시보드 데이터 조회 (수정된 버전)
+@st.cache_data(ttl=300)
+def get_dashboard_data(_conn, is_azure=False):
     """대시보드용 데이터 조회"""
 
-    # 포트인 월별 집계 - 컬럼명 수정
+    # 포트인 월별 집계 - 올바른 컬럼명 사용
     port_in_query = """
     SELECT 
-        strftime('%Y-%m', TRT_DATE) as month,
+        {} as month,
         COUNT(*) as count,
         SUM(SETL_AMT) as amount,
         BCHNG_COMM_CMPN_ID as operator
     FROM PY_NP_SBSC_RMNY_TXN 
-    WHERE TRT_DATE >= date('now', '-4 months')
-    GROUP BY strftime('%Y-%m', TRT_DATE), BCHNG_COMM_CMPN_ID
+    WHERE TRT_DATE >= {} 
+        AND NP_STTUS_CD IN ('OK', 'WD')
+    GROUP BY {}, BCHNG_COMM_CMPN_ID
     ORDER BY month
-    """
+    """.format(
+        "FORMAT(TRT_DATE, 'yyyy-MM')" if is_azure else "strftime('%Y-%m', TRT_DATE)",
+        "DATEADD(month, -4, GETDATE())" if is_azure else "date('now', '-4 months')",
+        "FORMAT(TRT_DATE, 'yyyy-MM')" if is_azure else "strftime('%Y-%m', TRT_DATE)",
+    )
 
-    # 포트아웃 월별 집계 - 컬럼명 수정
+    # 포트아웃 월별 집계 - 올바른 컬럼명 사용
     port_out_query = """
     SELECT 
-        strftime('%Y-%m', NP_TRMN_DATE) as month,
+        {} as month,
         COUNT(*) as count,
         SUM(PAY_AMT) as amount,
-        ACHNG_COMM_CMPN_ID as operator
+        BCHNG_COMM_CMPN_ID as operator
     FROM PY_NP_TRMN_RMNY_TXN 
     WHERE NP_TRMN_DATE IS NOT NULL 
-    AND NP_TRMN_DATE >= date('now', '-4 months')
-    GROUP BY strftime('%Y-%m', NP_TRMN_DATE), ACHNG_COMM_CMPN_ID
+        AND NP_TRMN_DATE >= {}
+        AND NP_TRMN_DTL_STTUS_VAL IN ('1', '3')
+    GROUP BY {}, BCHNG_COMM_CMPN_ID
     ORDER BY month
-    """
+    """.format(
+        (
+            "FORMAT(NP_TRMN_DATE, 'yyyy-MM')"
+            if is_azure
+            else "strftime('%Y-%m', NP_TRMN_DATE)"
+        ),
+        "DATEADD(month, -4, GETDATE())" if is_azure else "date('now', '-4 months')",
+        (
+            "FORMAT(NP_TRMN_DATE, 'yyyy-MM')"
+            if is_azure
+            else "strftime('%Y-%m', NP_TRMN_DATE)"
+        ),
+    )
 
     try:
         port_in_df = pd.read_sql_query(port_in_query, _conn)
@@ -139,43 +223,62 @@ def get_dashboard_data(_conn):
     return port_in_df, port_out_df
 
 
-# SQL 쿼리 생성 함수
-def generate_sql_query(user_input):
-    """사용자 입력을 SQL 쿼리로 변환"""
+# SQL 쿼리 생성 함수 (수정된 버전)
+def generate_sql_query(user_input, is_azure=False):
+    """사용자 입력을 SQL 쿼리로 변환 (Azure SQL/SQLite 호환)"""
 
     user_input_lower = user_input.lower()
+
+    # 날짜 함수 매핑
+    date_func = {
+        "now_minus_months": lambda months: (
+            f"DATEADD(month, -{months}, GETDATE())"
+            if is_azure
+            else f"date('now', '-{months} months')"
+        ),
+        "format_month": lambda col: (
+            f"FORMAT({col}, 'yyyy-MM')" if is_azure else f"strftime('%Y-%m', {col})"
+        ),
+        "substr_phone": lambda col: (
+            f"LEFT({col}, 3) + '****' + RIGHT({col}, 4)"
+            if is_azure
+            else f"SUBSTR({col}, 1, 3) || '****' || SUBSTR({col}, -4)"
+        ),
+    }
 
     # 1. 월별 집계 쿼리
     if "월별" in user_input_lower or "추이" in user_input_lower:
         if "포트인" in user_input_lower:
-            return """
+            return f"""
             SELECT 
-                strftime('%Y-%m', TRT_DATE) as 번호이동월,
+                {date_func['format_month']('TRT_DATE')} as 번호이동월,
                 BCHNG_COMM_CMPN_ID as 전사업자,
                 COUNT(*) as 총건수,
                 SUM(SETL_AMT) as 총금액,
-                ROUND(AVG(SETL_AMT), 0) as 정산금액평균
+                {'ROUND(AVG(SETL_AMT), 0)' if not is_azure else 'CAST(AVG(SETL_AMT) AS INT)'} as 정산금액평균
             FROM PY_NP_SBSC_RMNY_TXN 
-            WHERE TRT_DATE >= date('now', '-3 months')
-            GROUP BY strftime('%Y-%m', TRT_DATE), BCHNG_COMM_CMPN_ID
+            WHERE TRT_DATE >= {date_func['now_minus_months'](6)}
+                AND NP_STTUS_CD IN ('OK', 'WD')
+            GROUP BY {date_func['format_month']('TRT_DATE')}, BCHNG_COMM_CMPN_ID
             ORDER BY 번호이동월 DESC, 총금액 DESC
             """
         elif "포트아웃" in user_input_lower:
-            return """
+            return f"""
             SELECT 
-                strftime('%Y-%m', NP_TRMN_DATE) as 번호이동월,
-                ACHNG_COMM_CMPN_ID as 후사업자,
+                {date_func['format_month']('NP_TRMN_DATE')} as 번호이동월,
+                BCHNG_COMM_CMPN_ID as 전사업자,
                 COUNT(*) as 총건수,
                 SUM(PAY_AMT) as 총금액,
-                ROUND(AVG(PAY_AMT), 0) as 정산금액평균
+                {'ROUND(AVG(PAY_AMT), 0)' if not is_azure else 'CAST(AVG(PAY_AMT) AS INT)'} as 정산금액평균
             FROM PY_NP_TRMN_RMNY_TXN 
             WHERE NP_TRMN_DATE IS NOT NULL 
-            AND NP_TRMN_DATE >= date('now', '-3 months')
-            GROUP BY strftime('%Y-%m', NP_TRMN_DATE), ACHNG_COMM_CMPN_ID
+                AND NP_TRMN_DATE >= {date_func['now_minus_months'](4)}
+                AND NP_TRMN_DTL_STTUS_VAL IN ('1', '3')
+            GROUP BY {date_func['format_month']('NP_TRMN_DATE')}, BCHNG_COMM_CMPN_ID
             ORDER BY 번호이동월 DESC, 총금액 DESC
             """
 
-    # 2. 전화번호 검색
+    # 2. 전화번호 검색 (마스킹 적용)
     phone_match = re.search(r"010[- ]?\d{4}[- ]?\d{4}", user_input)
     if phone_match:
         phone = phone_match.group().replace("-", "").replace(" ", "")
@@ -183,22 +286,26 @@ def generate_sql_query(user_input):
         SELECT 
             'PORT_IN' as 번호이동타입,
             TRT_DATE as 번호이동일,
-            SUBSTR(TEL_NO, 1, 3) || '****' || SUBSTR(TEL_NO, -4) as 전화번호,
+            {date_func['substr_phone']('TEL_NO')} as 전화번호,
             SVC_CONT_ID,
             SETL_AMT as 정산금액,
-            BCHNG_COMM_CMPN_ID as 사업자
+            BCHNG_COMM_CMPN_ID as 전사업자,
+            ACHNG_COMM_CMPN_ID as 후사업자,
+            NP_STTUS_CD as 상태
         FROM PY_NP_SBSC_RMNY_TXN 
-        WHERE TEL_NO = '{phone}'
+        WHERE TEL_NO = '{phone}' AND NP_STTUS_CD IN ('OK', 'WD')
         UNION ALL
         SELECT 
             'PORT_OUT' as 번호이동타입,
             NP_TRMN_DATE as 번호이동일,
-            SUBSTR(TEL_NO, 1, 3) || '****' || SUBSTR(TEL_NO, -4) as 전화번호,
+            {date_func['substr_phone']('TEL_NO')} as 전화번호,
             SVC_CONT_ID,
             PAY_AMT as 정산금액,
-            ACHNG_COMM_CMPN_ID as 사업자
+            BCHNG_COMM_CMPN_ID as 전사업자,
+            ACHNG_COMM_CMPN_ID as 후사업자,
+            NP_TRMN_DTL_STTUS_VAL as 상태
         FROM PY_NP_TRMN_RMNY_TXN 
-        WHERE TEL_NO = '{phone}'
+        WHERE TEL_NO = '{phone}' AND NP_TRMN_DTL_STTUS_VAL IN ('1', '3')
         ORDER BY 번호이동일 DESC
         """
 
@@ -207,68 +314,119 @@ def generate_sql_query(user_input):
         keyword in user_input_lower
         for keyword in ["사업자", "회사", "통신사", "skt", "kt", "lgu+"]
     ):
-        return """
+        operator_filter = ""
+        if "skt" in user_input_lower or "sk" in user_input_lower:
+            operator_filter = (
+                "AND (BCHNG_COMM_CMPN_ID = 'SKT' OR ACHNG_COMM_CMPN_ID = 'SKT')"
+            )
+        elif "kt" in user_input_lower:
+            operator_filter = (
+                "AND (BCHNG_COMM_CMPN_ID = 'KT' OR ACHNG_COMM_CMPN_ID = 'KT')"
+            )
+        elif "lgu" in user_input_lower:
+            operator_filter = (
+                "AND (BCHNG_COMM_CMPN_ID = 'LGU+' OR ACHNG_COMM_CMPN_ID = 'LGU+')"
+            )
+
+        return f"""
         SELECT 
             BCHNG_COMM_CMPN_ID as 사업자,
             'PORT_IN' as 번호이동타입,
             COUNT(*) as 번호이동건수,
             SUM(SETL_AMT) as 총정산금액,
-            ROUND(AVG(SETL_AMT), 0) as 정산금액평균
+            {'ROUND(AVG(SETL_AMT), 0)' if not is_azure else 'CAST(AVG(SETL_AMT) AS INT)'} as 정산금액평균,
+            {'MIN(TRT_DATE)' if not is_azure else 'MIN(CAST(TRT_DATE AS DATE))'} as 최초일자,
+            {'MAX(TRT_DATE)' if not is_azure else 'MAX(CAST(TRT_DATE AS DATE))'} as 최신일자
         FROM PY_NP_SBSC_RMNY_TXN
-        WHERE TRT_DATE >= date('now', '-3 months')
+        WHERE TRT_DATE >= {date_func['now_minus_months'](3)}
+            AND NP_STTUS_CD IN ('OK', 'WD')
+            {operator_filter}
         GROUP BY BCHNG_COMM_CMPN_ID
         UNION ALL
         SELECT 
-            ACHNG_COMM_CMPN_ID as 사업자,
+            BCHNG_COMM_CMPN_ID as 사업자,
             'PORT_OUT' as 번호이동타입,
             COUNT(*) as 번호이동건수,
             SUM(PAY_AMT) as 총정산금액,
-            ROUND(AVG(PAY_AMT), 0) as 정산금액평균
+            {'ROUND(AVG(PAY_AMT), 0)' if not is_azure else 'CAST(AVG(PAY_AMT) AS INT)'} as 정산금액평균,
+            {'MIN(NP_TRMN_DATE)' if not is_azure else 'MIN(CAST(NP_TRMN_DATE AS DATE))'} as 최초일자,
+            {'MAX(NP_TRMN_DATE)' if not is_azure else 'MAX(CAST(NP_TRMN_DATE AS DATE))'} as 최신일자
         FROM PY_NP_TRMN_RMNY_TXN
         WHERE NP_TRMN_DATE IS NOT NULL 
-        AND NP_TRMN_DATE >= date('now', '-3 months')
-        GROUP BY ACHNG_COMM_CMPN_ID
+            AND NP_TRMN_DATE >= {date_func['now_minus_months'](3)}
+            AND NP_TRMN_DTL_STTUS_VAL IN ('1', '3')
+            {operator_filter}
+        GROUP BY BCHNG_COMM_CMPN_ID
         ORDER BY 사업자, 번호이동타입
         """
 
     # 4. 예치금 조회
     if "예치금" in user_input_lower:
-        return """
+        return f"""
         SELECT 
+            {date_func['format_month']('RMNY_DATE')} as 수납월,
             COUNT(*) as 총건수,
             SUM(DEPAZ_AMT) as 총금액,
-            ROUND(AVG(DEPAZ_AMT), 0) as 평균금액,
+            {'ROUND(AVG(DEPAZ_AMT), 0)' if not is_azure else 'CAST(AVG(DEPAZ_AMT) AS INT)'} as 평균금액,
             MIN(DEPAZ_AMT) as 최소금액,
-            MAX(DEPAZ_AMT) as 최대금액
+            MAX(DEPAZ_AMT) as 최대금액,
+            DEPAZ_DIV_CD as 예치금구분,
+            RMNY_METH_CD as 수납방법
         FROM PY_DEPAZ_BAS
-        WHERE RMNY_DATE >= date('now', '-3 months')
+        WHERE RMNY_DATE >= {date_func['now_minus_months'](3)}
+            AND DEPAZ_DIV_CD = '10'
+            AND RMNY_METH_CD = 'NA'
+        GROUP BY {date_func['format_month']('RMNY_DATE')}, DEPAZ_DIV_CD, RMNY_METH_CD
+        ORDER BY 수납월 DESC
         """
 
     # 5. 기본 현황 쿼리
-    return """
+    return f"""
+    WITH summary AS (
+        SELECT 
+            'PORT_IN' as 번호이동타입,
+            COUNT(*) as 번호이동건수,
+            SUM(SETL_AMT) as 총정산금액,
+            {'ROUND(AVG(SETL_AMT), 0)' if not is_azure else 'CAST(AVG(SETL_AMT) AS INT)'} as 정산금액평균,
+            COUNT(DISTINCT BCHNG_COMM_CMPN_ID) as 관련사업자수
+        FROM PY_NP_SBSC_RMNY_TXN
+        WHERE TRT_DATE >= {date_func['now_minus_months'](1)}
+            AND NP_STTUS_CD IN ('OK', 'WD')
+        UNION ALL
+        SELECT 
+            'PORT_OUT' as 번호이동타입,
+            COUNT(*) as 번호이동건수,
+            SUM(PAY_AMT) as 총정산금액,
+            {'ROUND(AVG(PAY_AMT), 0)' if not is_azure else 'CAST(AVG(PAY_AMT) AS INT)'} as 정산금액평균,
+            COUNT(DISTINCT BCHNG_COMM_CMPN_ID) as 관련사업자수
+        FROM PY_NP_TRMN_RMNY_TXN
+        WHERE NP_TRMN_DATE IS NOT NULL 
+            AND NP_TRMN_DATE >= {date_func['now_minus_months'](1)}
+            AND NP_TRMN_DTL_STTUS_VAL IN ('1', '3')
+    )
     SELECT 
-        'PORT_IN' as 번호이동타입,
-        COUNT(*) as 번호이동건수,
-        SUM(SETL_AMT) as 총정산금액,
-        ROUND(AVG(SETL_AMT), 0) as 정산금액평균
-    FROM PY_NP_SBSC_RMNY_TXN
-    WHERE TRT_DATE >= date('now', '-1 months')
-    UNION ALL
-    SELECT 
-        'PORT_OUT' as 번호이동타입,
-        COUNT(*) as 번호이동건수,
-        SUM(PAY_AMT) as 총정산금액,
-        ROUND(AVG(PAY_AMT), 0) as 정산금액평균
-    FROM PY_NP_TRMN_RMNY_TXN
-    WHERE NP_TRMN_DATE IS NOT NULL 
-    AND NP_TRMN_DATE >= date('now', '-1 months')
+        번호이동타입,
+        번호이동건수,
+        총정산금액,
+        정산금액평균,
+        관련사업자수,
+        {'CASE WHEN 번호이동타입 = ''PORT_IN'' THEN ''📥 '' + 번호이동타입 ELSE ''📤 '' + 번호이동타입 END' if is_azure else 'CASE WHEN 번호이동타입 = ''PORT_IN'' THEN ''📥 '' || 번호이동타입 ELSE ''📤 '' || 번호이동타입 END'} as 타입표시
+    FROM summary
+    ORDER BY 총정산금액 DESC
     """
 
 
 # 메인 애플리케이션
 def main():
-    # 데이터베이스 초기화
-    conn = init_database()
+    # 시스템 초기화
+    system_info = init_system()
+
+    azure_config = system_info["azure_config"]
+    db_manager = system_info["db_manager"]
+    sample_manager = system_info["sample_manager"]
+    conn = system_info["connection"]
+    is_azure = system_info["is_azure"]
+    connection_info = system_info["connection_info"]
 
     # 헤더
     st.markdown(
@@ -282,11 +440,14 @@ def main():
         unsafe_allow_html=True,
     )
 
+    # 연결 상태 표시
+    display_connection_status(connection_info, system_info.get("fallback", False))
+
     # 실시간 대시보드
     st.header("📈 번호이동 추이 분석 대시보드")
 
     with st.spinner("📊 최신 데이터를 분석하고 있습니다..."):
-        port_in_df, port_out_df = get_dashboard_data(conn)
+        port_in_df, port_out_df = get_dashboard_data(conn, is_azure)
 
     # 메트릭 카드 표시
     display_metrics(port_in_df, port_out_df)
@@ -298,10 +459,45 @@ def main():
     st.markdown("---")
 
     # AI 챗봇 섹션
-    display_chatbot(conn)
+    display_chatbot(conn, is_azure)
 
     # 사이드바
-    display_sidebar(conn)
+    display_sidebar(conn, system_info)
+
+
+def display_connection_status(connection_info, is_fallback=False):
+    """연결 상태 표시"""
+
+    if is_fallback:
+        st.markdown(
+            """
+        <div class="error-alert">
+            ⚠️ Azure 연결 실패로 로컬 모드로 전환되었습니다
+        </div>
+        """,
+            unsafe_allow_html=True,
+        )
+
+    connection_type = connection_info["type"]
+
+    if connection_type == "Azure SQL Database":
+        st.markdown(
+            """
+        <div class="azure-status">
+            ☁️ Azure SQL Database 연결됨 | 실시간 데이터 사용
+        </div>
+        """,
+            unsafe_allow_html=True,
+        )
+    else:
+        st.markdown(
+            """
+        <div class="local-status">
+            💻 로컬 SQLite 모드 | 샘플 데이터 사용
+        </div>
+        """,
+            unsafe_allow_html=True,
+        )
 
 
 def display_metrics(port_in_df, port_out_df):
@@ -482,10 +678,14 @@ def display_charts(port_in_df, port_out_df):
         st.info("📊 표시할 데이터가 없습니다. 샘플 데이터를 생성해주세요.")
 
 
-def display_chatbot(_conn):
+def display_chatbot(_conn, is_azure=False):
     """AI 챗봇 인터페이스"""
 
     st.header("🤖 자연어 기반 SQL 쿼리 생성 챗봇")
+
+    # DB 타입 표시
+    db_type_info = "☁️ Azure SQL Database" if is_azure else "💻 SQLite"
+    st.info(f"현재 연결: {db_type_info}")
 
     # 채팅 히스토리 초기화
     if "chat_history" not in st.session_state:
@@ -531,8 +731,8 @@ def display_chatbot(_conn):
     if st.button("🚀 쿼리 생성 및 실행") and user_input:
         with st.spinner("🤖 AI가 쿼리를 생성하고 실행 중입니다..."):
             try:
-                # SQL 쿼리 생성
-                sql_query = generate_sql_query(user_input)
+                # SQL 쿼리 생성 (Azure/SQLite 호환)
+                sql_query = generate_sql_query(user_input, is_azure)
 
                 # 쿼리 실행
                 result_df = pd.read_sql_query(sql_query, _conn)
@@ -577,6 +777,7 @@ def display_chatbot(_conn):
                         "sql": sql_query,
                         "result_count": len(result_df) if not result_df.empty else 0,
                         "timestamp": datetime.now().strftime("%Y-%m-%d %H:%M:%S"),
+                        "db_type": "Azure SQL" if is_azure else "SQLite",
                     }
                 )
 
@@ -590,6 +791,23 @@ def display_chatbot(_conn):
                     unsafe_allow_html=True,
                 )
                 st.info("💡 다른 방식으로 질문해보시거나 예시 쿼리를 사용해보세요.")
+
+    # 채팅 히스토리 표시
+    if st.session_state.chat_history:
+        st.subheader("📝 최근 쿼리 히스토리")
+        with st.expander("히스토리 보기"):
+            for chat in reversed(st.session_state.chat_history[-5:]):
+                st.markdown(
+                    f"""
+                <div class="chat-container">
+                    <strong>🗣️ 질문:</strong> {chat['user']}<br>
+                    <strong>⏰ 시간:</strong> {chat['timestamp']}<br>
+                    <strong>📊 결과:</strong> {chat['result_count']}건<br>
+                    <strong>🗄️ DB:</strong> {chat.get('db_type', 'Unknown')}
+                </div>
+                """,
+                    unsafe_allow_html=True,
+                )
 
     # 채팅 히스토리 표시
     if st.session_state.chat_history:
@@ -659,41 +877,142 @@ def create_result_visualization(df):
         st.plotly_chart(fig, use_container_width=True)
 
 
-def display_sidebar(_conn):
+def display_sidebar(_conn, system_info):
     """사이드바 표시"""
 
     with st.sidebar:
         st.header("🔧 시스템 정보")
 
+        # 연결 정보 표시
+        connection_info = system_info["connection_info"]
+        is_azure = system_info["is_azure"]
+
+        st.subheader("🔗 데이터베이스 연결")
+        if is_azure:
+            st.success("☁️ Azure SQL Database")
+            st.info("🔵 운영 모드")
+        else:
+            st.warning("💻 로컬 SQLite")
+            st.info("🟡 개발 모드 (샘플 데이터)")
+
         # 데이터베이스 현황
+        st.subheader("📊 데이터 현황")
         try:
-            port_in_count = pd.read_sql_query(
-                "SELECT COUNT(*) as count FROM PY_NP_SBSC_RMNY_TXN", _conn
-            ).iloc[0]["count"]
-            port_out_count = pd.read_sql_query(
-                "SELECT COUNT(*) as count FROM PY_NP_TRMN_RMNY_TXN", _conn
-            ).iloc[0]["count"]
-            deposit_count = pd.read_sql_query(
-                "SELECT COUNT(*) as count FROM PY_DEPAZ_BAS", _conn
-            ).iloc[0]["count"]
+            if is_azure:
+                # Azure SQL Database 쿼리
+                port_in_count = pd.read_sql_query(
+                    "SELECT COUNT(*) as count FROM PY_NP_SBSC_RMNY_TXN WHERE NP_STTUS_CD IN ('OK', 'WD')",
+                    _conn,
+                ).iloc[0]["count"]
+                port_out_count = pd.read_sql_query(
+                    "SELECT COUNT(*) as count FROM PY_NP_TRMN_RMNY_TXN WHERE NP_TRMN_DTL_STTUS_VAL IN ('1', '3')",
+                    _conn,
+                ).iloc[0]["count"]
+                deposit_count = pd.read_sql_query(
+                    "SELECT COUNT(*) as count FROM PY_DEPAZ_BAS WHERE DEPAZ_DIV_CD = '10'",
+                    _conn,
+                ).iloc[0]["count"]
+            else:
+                # SQLite 쿼리
+                port_in_count = pd.read_sql_query(
+                    "SELECT COUNT(*) as count FROM PY_NP_SBSC_RMNY_TXN", _conn
+                ).iloc[0]["count"]
+                port_out_count = pd.read_sql_query(
+                    "SELECT COUNT(*) as count FROM PY_NP_TRMN_RMNY_TXN", _conn
+                ).iloc[0]["count"]
+                deposit_count = pd.read_sql_query(
+                    "SELECT COUNT(*) as count FROM PY_DEPAZ_BAS", _conn
+                ).iloc[0]["count"]
 
             st.metric("📥 포트인 데이터", f"{port_in_count:,}건")
             st.metric("📤 포트아웃 데이터", f"{port_out_count:,}건")
             st.metric("💰 예치금 데이터", f"{deposit_count:,}건")
 
         except Exception as e:
-            st.error(f"데이터베이스 연결 오류: {e}")
+            st.error(f"데이터 조회 오류: {e}")
 
         st.markdown("---")
 
-        # 시스템 상태
-        st.subheader("⚙️ 시스템 상태")
-        st.success("🟢 샘플 데이터베이스 연결됨")
-        st.info("🔵 개발 모드 (샘플 데이터)")
-        st.success("🟢 Streamlit 서버 실행중")
+        # Azure 서비스 상태
+        st.subheader("⚙️ Azure 서비스 상태")
+        azure_config = system_info["azure_config"]
+
+        try:
+            # Azure 연결 테스트
+            test_results = azure_config.test_connection()
+
+            st.write(
+                "🔐 Key Vault:",
+                "✅ 연결됨" if test_results["key_vault"] else "❌ 연결 실패",
+            )
+            st.write(
+                "🤖 OpenAI:", "✅ 연결됨" if test_results["openai"] else "❌ 연결 실패"
+            )
+            st.write(
+                "🗄️ Database:",
+                "✅ 연결됨" if test_results["database"] else "❌ 연결 실패",
+            )
+
+            production_ready = azure_config.is_production_ready()
+            if production_ready:
+                st.success("🟢 운영 준비 완료")
+            else:
+                st.warning("🟡 개발 모드")
+                if test_results["errors"]:
+                    with st.expander("오류 세부사항"):
+                        for error in test_results["errors"]:
+                            st.text(f"• {error}")
+
+        except Exception as e:
+            st.error(f"Azure 상태 확인 실패: {e}")
+
+        st.markdown("---")
+
+        # 데이터 관리
+        st.subheader("🗂️ 데이터 관리")
+
+        if is_azure:
+            # Azure 모드에서 샘플 데이터 관리
+            col1, col2 = st.columns(2)
+
+            with col1:
+                if st.button("🔄 데이터 새로고침"):
+                    st.cache_data.clear()
+                    st.rerun()
+
+            with col2:
+                if st.button("🧹 샘플 데이터 정리"):
+                    try:
+                        sample_manager = system_info["sample_manager"]
+                        sample_manager.cleanup_sample_data(_conn)
+                        st.success("샘플 데이터 정리 완료")
+                        st.cache_data.clear()
+                        st.rerun()
+                    except Exception as e:
+                        st.error(f"정리 실패: {e}")
+
+            # 강제 로컬 모드 전환
+            if st.button("💻 로컬 모드로 전환"):
+                st.cache_resource.clear()
+                st.session_state.clear()
+                st.rerun()
+
+        else:
+            # 로컬 모드에서의 데이터 관리
+            if st.button("🔄 데이터 새로고침"):
+                st.cache_data.clear()
+                st.cache_resource.clear()
+                st.rerun()
+
+            # Azure 모드 시도
+            if st.button("☁️ Azure 모드 시도"):
+                st.cache_resource.clear()
+                st.session_state.clear()
+                st.rerun()
+
+        st.markdown("---")
 
         # 사용법 안내
-        st.markdown("---")
         st.subheader("💡 사용법 안내")
         st.markdown(
             """
@@ -703,15 +1022,56 @@ def display_sidebar(_conn):
         - "010-1234-5678 번호 조회"
         - "사업자별 비교"
         - "예치금 현황"
+        
+        **데이터베이스:**
+        - ☁️ Azure: 실시간 운영 데이터
+        - 💻 로컬: 샘플 테스트 데이터
         """
         )
 
-        # 새로고침 버튼
-        if st.button("🔄 데이터 새로고침"):
-            st.cache_data.clear()
-            st.rerun()
+        st.markdown("---")
 
 
 # 메인 실행
 if __name__ == "__main__":
-    main()
+    try:
+        main()
+    except Exception as e:
+        st.error(f"애플리케이션 시작 실패: {e}")
+        st.info("로컬 모드로 전환하여 다시 시도해보세요.")
+
+        # 긴급 폴백 - 기본 로컬 모드
+        try:
+            st.header("🔧 긴급 복구 모드")
+            st.warning("시스템 오류로 인해 기본 모드로 실행됩니다.")
+
+            # 기본 샘플 데이터베이스 생성
+            conn = create_sample_database()
+
+            st.success("✅ 기본 데이터베이스 연결 성공")
+
+            # 기본 현황 표시
+            try:
+                basic_query = """
+                SELECT 
+                    'PORT_IN' as type,
+                    COUNT(*) as count,
+                    SUM(SETL_AMT) as amount
+                FROM PY_NP_SBSC_RMNY_TXN
+                UNION ALL
+                SELECT 
+                    'PORT_OUT' as type,
+                    COUNT(*) as count,
+                    SUM(PAY_AMT) as amount
+                FROM PY_NP_TRMN_RMNY_TXN
+                """
+
+                basic_df = pd.read_sql_query(basic_query, conn)
+                st.dataframe(basic_df)
+
+            except Exception as basic_error:
+                st.error(f"기본 쿼리 실행 실패: {basic_error}")
+
+        except Exception as fallback_error:
+            st.error(f"긴급 복구 모드 실패: {fallback_error}")
+            st.info("시스템 관리자에게 문의하세요.")
