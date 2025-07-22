@@ -8,10 +8,22 @@ import re
 from datetime import datetime, timedelta
 import logging
 
-# Azure 설정 및 샘플 데이터 매니저 임포트
-from azure_config import get_azure_config
-from sample_data import SampleDataManager, create_sample_database
-from database_manager import DatabaseManagerFactory
+# 환경변수 로드
+try:
+    from dotenv import load_dotenv
+
+    load_dotenv()
+except ImportError:
+    pass  # python-dotenv가 없어도 동작
+
+# 설정 및 매니저 임포트
+try:
+    from azure_config import get_azure_config
+    from sample_data import SampleDataManager
+    from database_manager import DatabaseManagerFactory
+except ImportError as e:
+    st.error(f"필요한 모듈을 임포트할 수 없습니다: {e}")
+    st.stop()
 
 # 샘플 데이터 임포트
 from sample_data import create_sample_database
@@ -118,10 +130,10 @@ logging.basicConfig(level=logging.INFO)
 logger = logging.getLogger(__name__)
 
 
-# 데이터베이스 초기화
+# 시스템 초기화
 @st.cache_resource
 def init_system():
-    """시스템 초기화 - Azure 설정 및 데이터베이스 연결"""
+    """시스템 초기화"""
     try:
         # Azure 설정 로드
         azure_config = get_azure_config()
@@ -142,24 +154,12 @@ def init_system():
             "connection": conn,
             "is_azure": sample_manager.is_using_azure(),
             "connection_info": sample_manager.get_connection_info(),
+            "success": True,
         }
 
     except Exception as e:
-        logger.error(f"시스템 초기화 실패: {e}")
-        # 폴백: 로컬 모드로 초기화
-        azure_config = get_azure_config()
-        sample_manager = SampleDataManager(azure_config, force_local=True)
-        conn = sample_manager.create_sample_database()
-
-        return {
-            "azure_config": azure_config,
-            "db_manager": None,
-            "sample_manager": sample_manager,
-            "connection": conn,
-            "is_azure": False,
-            "connection_info": sample_manager.get_connection_info(),
-            "fallback": True,
-        }
+        # 폴백: 기본 로컬 모드
+        conn = create_sample_database(force_local=True)
 
 
 # 대시보드 데이터 조회 (수정된 버전)
@@ -387,8 +387,7 @@ def generate_sql_query(user_input, is_azure=False):
             'PORT_IN' as 번호이동타입,
             COUNT(*) as 번호이동건수,
             SUM(SETL_AMT) as 총정산금액,
-            {'ROUND(AVG(SETL_AMT), 0)' if not is_azure else 'CAST(AVG(SETL_AMT) AS INT)'} as 정산금액평균,
-            COUNT(DISTINCT BCHNG_COMM_CMPN_ID) as 관련사업자수
+            {'ROUND(AVG(SETL_AMT), 0)' if not is_azure else 'CAST(AVG(SETL_AMT) AS INT)'} as 정산금액평균
         FROM PY_NP_SBSC_RMNY_TXN
         WHERE TRT_DATE >= {date_func['now_minus_months'](1)}
             AND NP_STTUS_CD IN ('OK', 'WD')
@@ -397,8 +396,7 @@ def generate_sql_query(user_input, is_azure=False):
             'PORT_OUT' as 번호이동타입,
             COUNT(*) as 번호이동건수,
             SUM(PAY_AMT) as 총정산금액,
-            {'ROUND(AVG(PAY_AMT), 0)' if not is_azure else 'CAST(AVG(PAY_AMT) AS INT)'} as 정산금액평균,
-            COUNT(DISTINCT BCHNG_COMM_CMPN_ID) as 관련사업자수
+            {'ROUND(AVG(PAY_AMT), 0)' if not is_azure else 'CAST(AVG(PAY_AMT) AS INT)'} as 정산금액평균
         FROM PY_NP_TRMN_RMNY_TXN
         WHERE NP_TRMN_DATE IS NOT NULL 
             AND NP_TRMN_DATE >= {date_func['now_minus_months'](1)}
@@ -408,9 +406,7 @@ def generate_sql_query(user_input, is_azure=False):
         번호이동타입,
         번호이동건수,
         총정산금액,
-        정산금액평균,
-        관련사업자수,
-        {'CASE WHEN 번호이동타입 = ''PORT_IN'' THEN ''📥 '' + 번호이동타입 ELSE ''📤 '' + 번호이동타입 END' if is_azure else 'CASE WHEN 번호이동타입 = ''PORT_IN'' THEN ''📥 '' || 번호이동타입 ELSE ''📤 '' || 번호이동타입 END'} as 타입표시
+        정산금액평균
     FROM summary
     ORDER BY 총정산금액 DESC
     """
@@ -942,10 +938,6 @@ def display_sidebar(_conn, system_info):
             test_results = azure_config.test_connection()
 
             st.write(
-                "🔐 Key Vault:",
-                "✅ 연결됨" if test_results["key_vault"] else "❌ 연결 실패",
-            )
-            st.write(
                 "🤖 OpenAI:", "✅ 연결됨" if test_results["openai"] else "❌ 연결 실패"
             )
             st.write(
@@ -953,15 +945,11 @@ def display_sidebar(_conn, system_info):
                 "✅ 연결됨" if test_results["database"] else "❌ 연결 실패",
             )
 
-            production_ready = azure_config.is_production_ready()
-            if production_ready:
-                st.success("🟢 운영 준비 완료")
+            st.subheader("⚙️ Azure 서비스 상태")
+            if azure_config and azure_config.is_production_ready():
+                st.success("☁️ Azure 서비스 사용 가능")
             else:
-                st.warning("🟡 개발 모드")
-                if test_results["errors"]:
-                    with st.expander("오류 세부사항"):
-                        for error in test_results["errors"]:
-                            st.text(f"• {error}")
+                st.warning("💻 로컬 모드 사용")
 
         except Exception as e:
             st.error(f"Azure 상태 확인 실패: {e}")
@@ -1042,7 +1030,7 @@ if __name__ == "__main__":
 
         # 긴급 폴백 - 기본 로컬 모드
         try:
-            st.header("🔧 긴급 복구 모드")
+            st.header("🔧 로컬 모드")
             st.warning("시스템 오류로 인해 기본 모드로 실행됩니다.")
 
             # 기본 샘플 데이터베이스 생성
