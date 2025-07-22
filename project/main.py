@@ -8,6 +8,16 @@ import re
 from datetime import datetime, timedelta
 import logging
 
+from azure_config import get_azure_config
+from sample_data import SampleDataManager
+from database_manager import DatabaseManagerFactory
+import openai
+from openai import AzureOpenAI
+import json
+
+# 샘플 데이터 임포트
+from sample_data import create_sample_database
+
 # 환경변수 로드
 try:
     from dotenv import load_dotenv
@@ -16,17 +26,7 @@ try:
 except ImportError:
     pass  # python-dotenv가 없어도 동작
 
-# 설정 및 매니저 임포트
-try:
-    from azure_config import get_azure_config
-    from sample_data import SampleDataManager
-    from database_manager import DatabaseManagerFactory
-except ImportError as e:
-    st.error(f"필요한 모듈을 임포트할 수 없습니다: {e}")
-    st.stop()
-
-# 샘플 데이터 임포트
-from sample_data import create_sample_database
+OPENAI_AVAILABLE = True
 
 # 페이지 설정
 st.set_page_config(
@@ -223,8 +223,168 @@ def get_dashboard_data(_conn, is_azure=False):
     return port_in_df, port_out_df
 
 
+def generate_sql_with_openai(user_input, azure_config, is_azure=False):
+    """OpenAI를 사용하여 SQL 쿼리 생성"""
+
+    try:
+        # Azure OpenAI 클라이언트 초기화
+        client = AzureOpenAI(
+            api_key=azure_config.openai_api_key,
+            api_version=azure_config.openai_api_version,
+            azure_endpoint=azure_config.openai_endpoint,
+        )
+
+        # 데이터베이스 스키마 정보
+        schema_info = get_database_schema_info(is_azure)
+
+        # 프롬프트 구성
+        system_prompt = f"""
+        당신은 번호이동정산 시스템의 SQL 쿼리 생성 전문가입니다.
+        사용자의 자연어 질문을 분석하여 적절한 SQL 쿼리를 생성해주세요.
+
+        데이터베이스 정보:
+        - 타입: {'Azure SQL Database' if is_azure else 'SQLite'}
+        - 스키마: {schema_info}
+
+        규칙:
+        1. 전화번호는 항상 마스킹 처리 (앞 3자리 + **** + 뒤 4자리)
+        2. 날짜 함수는 데이터베이스 타입에 맞게 사용
+        3. 개인정보 보호를 위해 민감한 정보는 제한적으로 노출
+        4. 결과는 가독성 있게 한글 컬럼명 사용
+        5. 성능을 위해 적절한 WHERE 조건 추가
+
+        응답 형식: JSON
+        {{
+            "sql_query": "생성된 SQL 쿼리",
+            "explanation": "쿼리 설명",
+            "confidence": 0.9 (0-1 사이의 신뢰도)
+        }}
+        """
+
+        user_prompt = f"다음 질문에 대한 SQL 쿼리를 생성해주세요: {user_input}"
+
+        # OpenAI API 호출
+        response = client.chat.completions.create(
+            model=azure_config.openai_model_name,
+            messages=[
+                {"role": "system", "content": system_prompt},
+                {"role": "user", "content": user_prompt},
+            ],
+            temperature=0.1,
+            max_tokens=1000,
+        )
+
+        # 응답 파싱
+        response_content = response.choices[0].message.content
+
+        try:
+            # JSON 응답 파싱 시도
+            result = json.loads(response_content)
+            return {
+                "sql_query": result.get("sql_query", ""),
+                "explanation": result.get("explanation", ""),
+                "confidence": result.get("confidence", 0.0),
+                "source": "OpenAI",
+            }
+        except json.JSONDecodeError:
+            # JSON 파싱 실패 시 텍스트에서 SQL 추출 시도
+            sql_match = re.search(r"```sql\n(.*?)\n```", response_content, re.DOTALL)
+            if sql_match:
+                return {
+                    "sql_query": sql_match.group(1).strip(),
+                    "explanation": "OpenAI에서 생성된 쿼리",
+                    "confidence": 0.8,
+                    "source": "OpenAI",
+                }
+            else:
+                raise Exception("OpenAI 응답에서 SQL을 추출할 수 없습니다")
+
+    except Exception as e:
+        logger.warning(f"OpenAI SQL 생성 실패: {e}")
+        raise e
+
+
+def get_database_schema_info(is_azure=False):
+    """데이터베이스 스키마 정보 반환"""
+
+    schema = {
+        "tables": {
+            "PY_NP_SBSC_RMNY_TXN": {
+                "description": "번호이동 가입 정산 거래",
+                "columns": {
+                    "TEL_NO": "전화번호",
+                    "TRT_DATE": "거래일자",
+                    "SETL_AMT": "정산금액",
+                    "BCHNG_COMM_CMPN_ID": "전사업자ID",
+                    "ACHNG_COMM_CMPN_ID": "후사업자ID",
+                    "NP_STTUS_CD": "번호이동상태코드",
+                    "SVC_CONT_ID": "서비스계약ID",
+                },
+            },
+            "PY_NP_TRMN_RMNY_TXN": {
+                "description": "번호이동 해지 정산 거래",
+                "columns": {
+                    "TEL_NO": "전화번호",
+                    "NP_TRMN_DATE": "번호이동해지일자",
+                    "PAY_AMT": "지급금액",
+                    "BCHNG_COMM_CMPN_ID": "전사업자ID",
+                    "ACHNG_COMM_CMPN_ID": "후사업자ID",
+                    "NP_TRMN_DTL_STTUS_VAL": "해지상세상태값",
+                    "SVC_CONT_ID": "서비스계약ID",
+                },
+            },
+            "PY_DEPAZ_BAS": {
+                "description": "예치금 기본",
+                "columns": {
+                    "RMNY_DATE": "수납일자",
+                    "DEPAZ_AMT": "예치금액",
+                    "DEPAZ_DIV_CD": "예치금구분코드",
+                    "RMNY_METH_CD": "수납방법코드",
+                },
+            },
+        },
+        "common_filters": {
+            "port_in_status": "NP_STTUS_CD IN ('OK', 'WD')",
+            "port_out_status": "NP_TRMN_DTL_STTUS_VAL IN ('1', '3')",
+            "deposit_status": "DEPAZ_DIV_CD = '10' AND RMNY_METH_CD = 'NA'",
+        },
+    }
+
+    return json.dumps(schema, ensure_ascii=False, indent=2)
+
+
+def generate_sql_query(user_input, is_azure=False, azure_config=None):
+    """사용자 입력을 SQL 쿼리로 변환 (OpenAI 우선, 규칙 기반 폴백)"""
+
+    # 1. OpenAI 사용 시도 (우선순위)
+    if (
+        azure_config
+        and hasattr(azure_config, "openai_api_key")
+        and azure_config.openai_api_key
+    ):
+        try:
+            logger.info("OpenAI를 사용하여 SQL 쿼리 생성 시도")
+            openai_result = generate_sql_with_openai(user_input, azure_config, is_azure)
+
+            # 신뢰도가 높으면 OpenAI 결과 사용
+            if openai_result.get("confidence", 0) > 0.7:
+                logger.info(
+                    f"OpenAI 쿼리 생성 성공 (신뢰도: {openai_result.get('confidence')})"
+                )
+                return openai_result["sql_query"]
+            else:
+                logger.warning("OpenAI 신뢰도가 낮아 규칙 기반으로 폴백")
+
+        except Exception as e:
+            logger.warning(f"OpenAI 쿼리 생성 실패, 규칙 기반으로 폴백: {e}")
+
+    # 2. 규칙 기반 쿼리 생성 (폴백)
+    logger.info("규칙 기반 SQL 쿼리 생성 사용")
+    return generate_rule_based_sql_query(user_input, is_azure)
+
+
 # SQL 쿼리 생성 함수 (수정된 버전)
-def generate_sql_query(user_input, is_azure=False):
+def generate_rule_based_sql_query(user_input, is_azure=False):
     """사용자 입력을 SQL 쿼리로 변환 (Azure SQL/SQLite 호환)"""
 
     user_input_lower = user_input.lower()
@@ -380,35 +540,11 @@ def generate_sql_query(user_input, is_azure=False):
         ORDER BY 수납월 DESC
         """
 
-    # 5. 기본 현황 쿼리
-    return f"""
-    WITH summary AS (
-        SELECT 
-            'PORT_IN' as 번호이동타입,
-            COUNT(*) as 번호이동건수,
-            SUM(SETL_AMT) as 총정산금액,
-            {'ROUND(AVG(SETL_AMT), 0)' if not is_azure else 'CAST(AVG(SETL_AMT) AS INT)'} as 정산금액평균
-        FROM PY_NP_SBSC_RMNY_TXN
-        WHERE TRT_DATE >= {date_func['now_minus_months'](1)}
-            AND NP_STTUS_CD IN ('OK', 'WD')
-        UNION ALL
-        SELECT 
-            'PORT_OUT' as 번호이동타입,
-            COUNT(*) as 번호이동건수,
-            SUM(PAY_AMT) as 총정산금액,
-            {'ROUND(AVG(PAY_AMT), 0)' if not is_azure else 'CAST(AVG(PAY_AMT) AS INT)'} as 정산금액평균
-        FROM PY_NP_TRMN_RMNY_TXN
-        WHERE NP_TRMN_DATE IS NOT NULL 
-            AND NP_TRMN_DATE >= {date_func['now_minus_months'](1)}
-            AND NP_TRMN_DTL_STTUS_VAL IN ('1', '3')
-    )
+    # 기본 쿼리
+    return """
     SELECT 
-        번호이동타입,
-        번호이동건수,
-        총정산금액,
-        정산금액평균
-    FROM summary
-    ORDER BY 총정산금액 DESC
+        'OpenAI 및 규칙 기반 쿼리 생성을 시도했으나 적절한 쿼리를 생성하지 못했습니다' as 메시지,
+        '더 구체적으로 질문해주시거나 예시 쿼리를 사용해보세요' as 안내
     """
 
 
@@ -455,7 +591,7 @@ def main():
     st.markdown("---")
 
     # AI 챗봇 섹션
-    display_chatbot(conn, is_azure)
+    display_chatbot(conn, is_azure, system_info)
 
     # 사이드바
     display_sidebar(conn, system_info)
@@ -674,10 +810,47 @@ def display_charts(port_in_df, port_out_df):
         st.info("📊 표시할 데이터가 없습니다. 샘플 데이터를 생성해주세요.")
 
 
-def display_chatbot(_conn, is_azure=False):
-    """AI 챗봇 인터페이스"""
+def display_chatbot(_conn, is_azure, system_info):
+    """AI 챗봇 인터페이스 (OpenAI 우선 사용)"""
 
-    st.header("🤖 자연어 기반 SQL 쿼리 생성 챗봇")
+    # Azure 설정 가져오기
+    azure_config = None
+    openai_available = False
+
+    try:
+        azure_config = system_info.get("azure_config")
+        if not azure_config:
+            from azure_config import get_azure_config
+
+            azure_config = get_azure_config()
+
+        # OpenAI 사용 가능 여부 확인
+        if (
+            azure_config
+            and hasattr(azure_config, "openai_api_key")
+            and azure_config.openai_api_key
+            and hasattr(azure_config, "openai_endpoint")
+            and azure_config.openai_endpoint
+        ):
+            openai_available = True
+
+    except Exception as config_error:
+        st.warning(f"Azure 설정 로드 실패: {config_error}")
+        azure_config = None
+
+    # AI 상태 표시 (더 명확하게)
+    if openai_available:
+        st.success("🤖 Azure OpenAI 사용 가능 - 자연어 질문을 SQL로 자동 변환")
+        st.info(
+            "💡 예: '지난 3개월 동안 SK텔레콤에서 LG유플러스로 이동한 고객 수와 정산 금액을 월별로 보여줘'"
+        )
+    else:
+        st.warning(
+            "📋 규칙 기반 쿼리 생성만 사용 가능 - 미리 정의된 패턴으로 쿼리 생성"
+        )
+        st.info(
+            "💡 예: '월별 포트인 현황', 'SK텔레콤 포트아웃 현황', '010-1234-5678 번호 조회'"
+        )
 
     # DB 타입 표시
     db_type_info = "☁️ Azure SQL Database" if is_azure else "💻 SQLite"
@@ -687,65 +860,100 @@ def display_chatbot(_conn, is_azure=False):
     if "chat_history" not in st.session_state:
         st.session_state.chat_history = []
 
-    # 예시 쿼리 버튼들
+    # 예시 쿼리 버튼들 (OpenAI 사용 가능 여부에 따라 다른 예시 제공)
     st.subheader("💡 빠른 쿼리 예시")
 
-    col1, col2, col3 = st.columns(3)
+    if openai_available:
+        # OpenAI 사용 가능한 경우 - 더 복잡한 자연어 예시
+        col1, col2, col3 = st.columns(3)
 
-    with col1:
-        if st.button("📊 월별 포트인 현황"):
-            st.session_state.user_input = "월별 포트인 현황을 알려줘"
+        with col1:
+            if st.button("🤖 AI: 월별 포트인 분석"):
+                st.session_state.user_input = "지난 6개월 동안 월별 포트인 현황을 사업자별로 분석해서 총 건수, 총 금액, 평균 정산액을 보여줘"
 
-    with col2:
-        if st.button("🔍 특정 번호 조회"):
-            st.session_state.user_input = "010-1234-5678 번호의 정산 내역 확인해줘"
+        with col2:
+            if st.button("🤖 AI: 사업자 비교 분석"):
+                st.session_state.user_input = (
+                    "SK텔레콤, KT, LG유플러스 간의 포트인/포트아웃 현황을 비교 분석해줘"
+                )
 
-    with col3:
-        if st.button("📈 사업자별 집계"):
-            st.session_state.user_input = "사업자별 번호이동 정산 현황 보여줘"
+        with col3:
+            if st.button("🤖 AI: 정산 패턴 분석"):
+                st.session_state.user_input = "최근 3개월 예치금 수납 패턴을 월별로 분석하고 평균, 최대, 최소 금액을 알려줘"
 
-    # 추가 예시들
-    st.markdown("### 🎯 더 많은 예시")
-    examples = [
-        "SK텔레콤 포트아웃 현황 알려줘",
-        "최근 3개월 예치금 현황 보여줘",
-        "월별 번호이동 추이 분석해줘",
-        "LG유플러스 관련 정산 내역 확인해줘",
-    ]
+        # 추가 AI 예시
+        st.markdown("### 🧠 고급 AI 쿼리 예시")
+        ai_examples = [
+            "특정 번호 010-1234-5678의 전체 번호이동 이력과 정산 내역을 시간순으로 정리해줘",
+            "지난 달 대비 이번 달 포트인 증감률을 사업자별로 계산해줘",
+            "정산 금액이 평균보다 높은 거래들의 패턴을 분석해줘",
+            "주요 사업자별 고객 유치(포트인) 대비 이탈(포트아웃) 비율을 계산해줘",
+        ]
+    else:
+        # OpenAI 사용 불가능한 경우 - 기본 규칙 기반 예시
+        col1, col2, col3 = st.columns(3)
 
-    for i, example in enumerate(examples):
+        with col1:
+            if st.button("📊 월별 포트인 현황"):
+                st.session_state.user_input = "월별 포트인 현황을 알려줘"
+
+        with col2:
+            if st.button("🔍 특정 번호 조회"):
+                st.session_state.user_input = "010-1234-5678 번호의 정산 내역 확인해줘"
+
+        with col3:
+            if st.button("📈 사업자별 집계"):
+                st.session_state.user_input = "사업자별 번호이동 정산 현황 보여줘"
+
+        # 기본 예시
+        st.markdown("### 🎯 규칙 기반 쿼리 예시")
+        ai_examples = [
+            "SK텔레콤 포트아웃 현황 알려줘",
+            "최근 3개월 예치금 현황 보여줘",
+            "월별 번호이동 추이 분석해줘",
+            "LG유플러스 관련 정산 내역 확인해줘",
+        ]
+
+    # 예시 버튼들 표시
+    for i, example in enumerate(ai_examples):
         if st.button(f"💬 {example}", key=f"example_{i}"):
             st.session_state.user_input = example
 
     # 사용자 입력
+    placeholder_text = (
+        "예: '지난 3개월 SK텔레콤 포트인 고객의 평균 정산액과 월별 추이를 분석해줘'"
+        if openai_available
+        else "예: '2024년 1월 SK텔레콤 포트인 정산 금액 알려줘'"
+    )
+
     user_input = st.text_input(
-        "💬 질문을 입력하세요:",
-        key="user_input",
-        placeholder="예: '2024년 1월 SK텔레콤 포트인 정산 금액 알려줘'",
+        "💬 질문을 입력하세요:", key="user_input", placeholder=placeholder_text
     )
 
     if st.button("🚀 쿼리 생성 및 실행") and user_input:
-        with st.spinner("🤖 AI가 쿼리를 생성하고 실행 중입니다..."):
+        query_method = "AI (OpenAI)" if openai_available else "규칙 기반"
+
+        with st.spinner(f"🤖 {query_method} 방식으로 쿼리를 생성하고 실행 중입니다..."):
             try:
-                # SQL 쿼리 생성 (Azure/SQLite 호환)
-                sql_query = generate_sql_query(user_input, is_azure)
+                # SQL 쿼리 생성 (OpenAI 우선, azure_config 전달)
+                sql_query = generate_sql_query(user_input, is_azure, azure_config)
 
                 # 쿼리 실행
                 result_df = pd.read_sql_query(sql_query, _conn)
 
                 # 결과 표시
+                success_message = (
+                    f"✅ {query_method}로 쿼리가 성공적으로 실행되었습니다!"
+                )
                 st.markdown(
-                    """
-                <div class="success-alert">
-                    ✅ 쿼리가 성공적으로 실행되었습니다!
-                </div>
-                """,
+                    f'<div class="success-alert">{success_message}</div>',
                     unsafe_allow_html=True,
                 )
 
                 # 생성된 SQL 표시
                 with st.expander("🔍 생성된 SQL 쿼리 보기"):
                     st.code(sql_query, language="sql")
+                    st.caption(f"생성 방식: {query_method}")
 
                 # 결과 데이터 표시
                 if not result_df.empty:
@@ -774,48 +982,40 @@ def display_chatbot(_conn, is_azure=False):
                         "result_count": len(result_df) if not result_df.empty else 0,
                         "timestamp": datetime.now().strftime("%Y-%m-%d %H:%M:%S"),
                         "db_type": "Azure SQL" if is_azure else "SQLite",
+                        "query_method": query_method,
                     }
                 )
 
             except Exception as e:
+                error_message = f"❌ 쿼리 실행 중 오류가 발생했습니다: {str(e)}"
                 st.markdown(
-                    f"""
-                <div class="error-alert">
-                    ❌ 쿼리 실행 중 오류가 발생했습니다: {str(e)}
-                </div>
-                """,
+                    f'<div class="error-alert">{error_message}</div>',
                     unsafe_allow_html=True,
                 )
-                st.info("💡 다른 방식으로 질문해보시거나 예시 쿼리를 사용해보세요.")
 
-    # 채팅 히스토리 표시
+                if openai_available:
+                    st.info(
+                        "💡 AI 쿼리 생성에 실패했습니다. 더 구체적으로 질문하거나 예시 쿼리를 사용해보세요."
+                    )
+                else:
+                    st.info(
+                        "💡 규칙 기반 쿼리 생성에 실패했습니다. 미리 정의된 패턴으로 질문해보시거나 예시 쿼리를 사용해보세요."
+                    )
+
+    # 채팅 히스토리 표시 (쿼리 생성 방식 정보 포함)
     if st.session_state.chat_history:
         st.subheader("📝 최근 쿼리 히스토리")
         with st.expander("히스토리 보기"):
             for chat in reversed(st.session_state.chat_history[-5:]):
+                query_method_info = chat.get("query_method", "알 수 없음")
                 st.markdown(
                     f"""
                 <div class="chat-container">
                     <strong>🗣️ 질문:</strong> {chat['user']}<br>
                     <strong>⏰ 시간:</strong> {chat['timestamp']}<br>
                     <strong>📊 결과:</strong> {chat['result_count']}건<br>
-                    <strong>🗄️ DB:</strong> {chat.get('db_type', 'Unknown')}
-                </div>
-                """,
-                    unsafe_allow_html=True,
-                )
-
-    # 채팅 히스토리 표시
-    if st.session_state.chat_history:
-        st.subheader("📝 최근 쿼리 히스토리")
-        with st.expander("히스토리 보기"):
-            for chat in reversed(st.session_state.chat_history[-5:]):
-                st.markdown(
-                    f"""
-                <div class="chat-container">
-                    <strong>🗣️ 질문:</strong> {chat['user']}<br>
-                    <strong>⏰ 시간:</strong> {chat['timestamp']}<br>
-                    <strong>📊 결과:</strong> {chat['result_count']}건
+                    <strong>🗄️ DB:</strong> {chat.get('db_type', 'Unknown')}<br>
+                    <strong>🤖 생성방식:</strong> {query_method_info}
                 </div>
                 """,
                     unsafe_allow_html=True,
