@@ -1,5 +1,7 @@
 # database_manager.py - 데이터베이스 연결 및 쿼리 실행 관리
-import pyodbc
+import pymssql
+from sqlalchemy import create_engine
+from urllib.parse import quote_plus
 import pandas as pd
 import sqlite3
 import logging
@@ -19,7 +21,7 @@ class DatabaseManager:
 
         Args:
             azure_config: Azure 설정 객체
-            use_sample_data: 샘플 데이터 사용 여부 (개발용)
+            use_sample_data: 샘플 데이터 사용 여부 (True면 SQLite, False면 Azure)
         """
         self.azure_config = azure_config
         self.use_sample_data = use_sample_data
@@ -27,38 +29,121 @@ class DatabaseManager:
 
         # 연결 설정
         self.connection_string = None
-        self.sample_manager = None
         self.sample_connection = None
 
-        # Azure SQL Database 사용 여부 결정
-        self.use_azure = (
-            not use_sample_data
-            and azure_config
-            and azure_config.is_production_ready()
-            and azure_config.sql_connection_string
+        # 성능 설정
+        self.max_execution_time = 30
+        self.max_result_rows = 10000
+
+        # 연결 타입 정보
+        self.connection_type = (
+            "Sample SQLite" if use_sample_data else "Azure SQL Database"
         )
 
-        # 성능 설정
-        self.max_execution_time = 30  # 최대 쿼리 실행 시간 (초)
-        self.max_result_rows = 2000  # 최대 결과 행 수
-
+        # 연결 초기화
         self._initialize_connection()
 
     def _initialize_connection(self):
-        """데이터베이스 연결 초기화"""
-        if self.use_azure:
-            self._initialize_azure_connection()
-        else:
+        """데이터베이스 연결 초기화 - 타입에 따라 분기"""
+        if self.use_sample_data:
+            self.logger.info("🔧 샘플 데이터베이스 연결 초기화...")
             self._initialize_sample_connection()
+        else:
+            self.logger.info("☁️ Azure SQL Database 연결 초기화...")
+            self._initialize_azure_connection()
 
     def _initialize_sample_connection(self):
         """샘플 데이터베이스 연결 초기화"""
         try:
-            self.sample_manager = SampleDataManager(self.azure_config, force_local=True)
-            self.sample_connection = self.sample_manager.create_sample_database()
-            self.logger.info("샘플 데이터베이스 연결 성공")
+            # sample_data 모듈 동적 임포트
+            try:
+                from sample_data import create_sample_database
+
+                self.sample_connection = create_sample_database()
+                self.logger.info("✅ 샘플 데이터베이스 연결 성공")
+            except ImportError as e:
+                self.logger.error(f"sample_data 모듈 임포트 실패: {e}")
+                # 간단한 메모리 SQLite 생성
+                import sqlite3
+
+                self.sample_connection = sqlite3.connect(
+                    ":memory:", check_same_thread=False
+                )
+                self._create_basic_sample_tables()
+                self.logger.info("✅ 기본 SQLite 메모리 DB 생성")
+
         except Exception as e:
-            self.logger.error(f"샘플 데이터베이스 연결 실패: {e}")
+            self.logger.error(f"❌ 샘플 데이터베이스 연결 실패: {e}")
+            raise e
+
+    def _create_basic_sample_tables(self):
+        """기본 샘플 테이블 생성 (sample_data 모듈 없을 때)"""
+        try:
+            cursor = self.sample_connection.cursor()
+
+            # 기본 테이블 생성
+            cursor.execute(
+                """
+                CREATE TABLE IF NOT EXISTS PY_NP_SBSC_RMNY_TXN (
+                    NP_SBSC_RMNY_SEQ INTEGER PRIMARY KEY,
+                    TRT_DATE DATE,
+                    SETL_AMT DECIMAL(15,2),
+                    BCHNG_COMM_CMPN_ID VARCHAR(11),
+                    ACHNG_COMM_CMPN_ID VARCHAR(11),
+                    TEL_NO VARCHAR(20),
+                    NP_STTUS_CD VARCHAR(3)
+                )
+            """
+            )
+
+            cursor.execute(
+                """
+                CREATE TABLE IF NOT EXISTS PY_NP_TRMN_RMNY_TXN (
+                    TRMN_NP_ADM_NO VARCHAR(11) PRIMARY KEY,
+                    NP_TRMN_DATE DATE,
+                    PAY_AMT DECIMAL(15,2),
+                    BCHNG_COMM_CMPN_ID VARCHAR(11),
+                    ACHNG_COMM_CMPN_ID VARCHAR(11),
+                    TEL_NO VARCHAR(20),
+                    NP_TRMN_DTL_STTUS_VAL VARCHAR(3)
+                )
+            """
+            )
+
+            cursor.execute(
+                """
+                CREATE TABLE IF NOT EXISTS PY_DEPAZ_BAS (
+                    DEPAZ_SEQ INTEGER PRIMARY KEY,
+                    RMNY_DATE DATE,
+                    DEPAZ_AMT DECIMAL(15,2),
+                    DEPAZ_DIV_CD VARCHAR(3),
+                    RMNY_METH_CD VARCHAR(5)
+                )
+            """
+            )
+
+            # 기본 샘플 데이터 삽입
+            sample_data = [
+                ("2024-01-15", 15000, "SKT", "KT", "01012345678", "OK"),
+                ("2024-02-20", 25000, "KT", "LGU+", "01087654321", "OK"),
+                ("2024-03-10", 18000, "LGU+", "SKT", "01055667788", "WD"),
+            ]
+
+            for data in sample_data:
+                cursor.execute(
+                    """
+                    INSERT OR REPLACE INTO PY_NP_SBSC_RMNY_TXN 
+                    (TRT_DATE, SETL_AMT, BCHNG_COMM_CMPN_ID, ACHNG_COMM_CMPN_ID, TEL_NO, NP_STTUS_CD)
+                    VALUES (?, ?, ?, ?, ?, ?)
+                """,
+                    data,
+                )
+
+            self.sample_connection.commit()
+            self.logger.info("📊 기본 샘플 데이터 생성 완료")
+
+        except Exception as e:
+            self.logger.error(f"기본 샘플 테이블 생성 실패: {e}")
             raise e
 
     def _initialize_azure_connection(self):
@@ -68,46 +153,66 @@ class DatabaseManager:
             if not self.connection_string:
                 raise ValueError("데이터베이스 연결 문자열을 가져올 수 없습니다")
 
-            # Azure용 샘플 데이터 매니저 생성
-            self.sample_manager = SampleDataManager(
-                self.azure_config, force_local=False
-            )
-
             # 연결 테스트
             if self.test_connection():
-                self.logger.info("Azure SQL Database 연결 성공")
+                self.logger.info("✅ Azure SQL Database 연결 성공")
             else:
-                raise Exception("연결 테스트 실패")
+                raise Exception("Azure 연결 테스트 실패")
 
         except Exception as e:
-            self.logger.error(f"Azure SQL Database 연결 실패: {e}")
-            self.logger.info("샘플 데이터베이스로 폴백")
-            self.use_azure = False
-            self._initialize_sample_connection()
+            self.logger.error(f"❌ Azure SQL Database 연결 실패: {e}")
+            raise e
+
+    def _create_sqlalchemy_engine(self):
+        """pymssql용 SQLAlchemy 엔진 생성"""
+        try:
+            params = self.connection_params
+            server = params["server"]
+            database = params["database"]
+            user = quote_plus(params["user"])
+            password = quote_plus(params["password"])
+            port = params.get("port", 1433)
+
+            # pymssql 연결 URL
+            connection_url = (
+                f"mssql+pymssql://{user}:{password}@{server}:{port}/{database}"
+            )
+
+            self.sqlalchemy_engine = create_engine(
+                connection_url, pool_timeout=20, pool_recycle=3600, echo=False
+            )
+
+            self.logger.info("pymssql SQLAlchemy 엔진 생성 성공")
+
+        except Exception as e:
+            self.logger.error(f"pymssql SQLAlchemy 엔진 생성 실패: {e}")
             raise e
 
     @contextmanager
     def get_connection(self):
         """데이터베이스 연결 컨텍스트 매니저"""
-        if self.use_azure:
+        if self.use_sample_data:
+            # SQLite 샘플 연결
+            if not self.sample_connection:
+                raise Exception("샘플 데이터베이스가 초기화되지 않았습니다")
+            yield self.sample_connection
+        else:
+            # Azure SQL 연결
+            if not self.connection_string:
+                raise Exception("Azure 연결 문자열이 없습니다")
+
             conn = None
             try:
-                import pyodbc
-
                 conn = pyodbc.connect(
-                    self.connection_string,
-                    timeout=self.max_execution_time,
-                    autocommit=True,
+                    self.connection_string, timeout=self.max_execution_time
                 )
                 yield conn
             except Exception as e:
-                self.logger.error(f"Azure SQL Database 연결 오류: {e}")
+                self.logger.error(f"Azure 연결 오류: {e}")
                 raise e
             finally:
                 if conn:
                     conn.close()
-        else:
-            yield self.sample_connection
 
     def execute_query(
         self, sql_query: str, params: Optional[Dict] = None
@@ -130,7 +235,7 @@ class DatabaseManager:
             "query_hash": hash(sql_query),
             "success": False,
             "error_message": None,
-            "database_type": "Azure SQL" if self.use_azure else "SQLite",
+            "database_type": "Azure SQL" if self.use_sample_data else "SQLite",
             "query_preview": (
                 sql_query[:100] + "..." if len(sql_query) > 100 else sql_query
             ),
@@ -142,8 +247,13 @@ class DatabaseManager:
                 raise ValueError("안전하지 않은 쿼리입니다")
 
             # 쿼리 실행
-            with self.get_connection() as conn:
-                df = pd.read_sql_query(sql_query, conn, params=params)
+            if self.use_sample_data:
+                # SQLite용 쿼리
+                with self.get_connection() as conn:
+                    df = pd.read_sql_query(sql_query, conn, params=params)
+            else:
+                # 🔥 SQLAlchemy 엔진 직접 사용
+                df = pd.read_sql_query(sql_query, self.sqlalchemy_engine, params=params)
 
                 # 결과 크기 제한
                 if len(df) > self.max_result_rows:
@@ -258,37 +368,82 @@ class DatabaseManager:
             self.logger.error(f"연결 테스트 실패: {e}")
             return False
 
+    def cleanup_connections(self):
+        """연결 정리"""
+        try:
+            if self.use_sample_data and self.sample_connection:
+                self.sample_connection.close()
+                self.logger.info("샘플 데이터베이스 연결 종료")
+
+        except Exception as e:
+            self.logger.error(f"연결 정리 중 오류: {e}")
+
     def get_table_info(self) -> Dict[str, Dict]:
-        """테이블 정보 조회"""
+        """테이블 정보 조회 - 속성명 수정"""
         table_info = {}
 
         try:
             with self.get_connection() as conn:
-                tables = ["PY_NP_TRMN_RMNY_TXN", "PY_NP_SBSC_RMNY_TXN", "PY_DEPAZ_BAS"]
+                # 샘플 데이터와 Azure 데이터베이스에서 다른 테이블명 사용
+                if self.use_sample_data:  # SQLite 샘플 데이터
+                    tables = [
+                        "PY_NP_TRMN_RMNY_TXN",
+                        "PY_NP_SBSC_RMNY_TXN",
+                        "PY_DEPAZ_BAS",
+                    ]
+                    date_columns = {
+                        "PY_NP_TRMN_RMNY_TXN": "NP_TRMN_DATE",
+                        "PY_NP_SBSC_RMNY_TXN": "TRT_DATE",
+                        "PY_DEPAZ_BAS": "RMNY_DATE",
+                    }
+                else:  # Azure SQL Database
+                    tables = [
+                        "PY_NP_TRMN_RMNY_TXN",
+                        "PY_NP_SBSC_RMNY_TXN",
+                        "PY_DEPAZ_BAS",
+                    ]
+                    date_columns = {
+                        "PY_NP_TRMN_RMNY_TXN": "SETL_TRT_DATE",
+                        "PY_NP_SBSC_RMNY_TXN": "TRT_DATE",
+                        "PY_DEPAZ_BAS": "DPST_DT",
+                    }
 
                 for table in tables:
                     try:
+                        # 테이블 존재 여부 확인
+                        if self.use_sample_data:
+                            # SQLite용 테이블 존재 확인
+                            check_query = f"SELECT name FROM sqlite_master WHERE type='table' AND name='{table}'"
+                        else:
+                            # Azure SQL용 테이블 존재 확인
+                            check_query = f"SELECT TABLE_NAME FROM INFORMATION_SCHEMA.TABLES WHERE TABLE_NAME = '{table}'"
+
+                        check_result = pd.read_sql_query(check_query, conn)
+                        if check_result.empty:
+                            table_info[table] = {
+                                "row_count": 0,
+                                "latest_date": None,
+                                "status": "❌ 테이블 없음",
+                            }
+                            continue
+
                         # 테이블 행 수 조회
                         count_query = f"SELECT COUNT(*) as row_count FROM {table}"
                         count_result = pd.read_sql_query(count_query, conn)
                         row_count = count_result.iloc[0]["row_count"]
 
                         # 최근 데이터 날짜 조회
-                        if table == "PY_NP_TRMN_RMNY_TXN":
-                            date_query = (
-                                f"SELECT MAX(NP_TRMN_DATE) as latest_date FROM {table}"
-                            )
-                        elif table == "PY_NP_SBSC_RMNY_TXN":
-                            date_query = (
-                                f"SELECT MAX(TRT_DATE) as latest_date FROM {table}"
-                            )
-                        else:  # PY_DEPAZ_BAS
-                            date_query = (
-                                f"SELECT MAX(RMNY_DATE) as latest_date FROM {table}"
-                            )
+                        date_column = date_columns.get(table)
+                        if date_column:
+                            if self.use_sample_data:
+                                date_query = f"SELECT MAX({date_column}) as latest_date FROM {table}"
+                            else:
+                                date_query = f"SELECT MAX({date_column}) as latest_date FROM {table}"
 
-                        date_result = pd.read_sql_query(date_query, conn)
-                        latest_date = date_result.iloc[0]["latest_date"]
+                            date_result = pd.read_sql_query(date_query, conn)
+                            latest_date = date_result.iloc[0]["latest_date"]
+                        else:
+                            latest_date = "N/A"
 
                         table_info[table] = {
                             "row_count": row_count,
@@ -300,7 +455,7 @@ class DatabaseManager:
                         table_info[table] = {
                             "row_count": 0,
                             "latest_date": None,
-                            "status": f"❌ 오류: {str(e)}",
+                            "status": f"❌ 오류: {str(e)[:50]}...",
                         }
 
         except Exception as e:
@@ -309,26 +464,33 @@ class DatabaseManager:
         return table_info
 
     def get_performance_stats(self) -> Dict[str, Any]:
-        """데이터베이스 성능 통계"""
+        """데이터베이스 성능 통계 - Azure 정보 추가"""
         stats = {
-            "connection_type": (
-                "Sample SQLite" if self.use_sample_data else "Azure SQL Database"
-            ),
+            "connection_type": self.connection_type,
             "max_execution_time": self.max_execution_time,
             "max_result_rows": self.max_result_rows,
             "connection_status": (
                 "✅ 연결됨" if self.test_connection() else "❌ 연결 실패"
             ),
+            "azure_services": (
+                self.azure_config.test_connection()
+                if not self.use_sample_data
+                else None
+            ),
         }
 
         # 테이블 정보 추가
-        table_info = self.get_table_info()
-        stats["tables"] = table_info
+        try:
+            table_info = self.get_table_info()
+            stats["tables"] = table_info
+        except Exception as e:
+            self.logger.error(f"테이블 정보 조회 실패: {e}")
+            stats["tables"] = {}
 
         return stats
 
     def get_sample_data(self, table_name: str, limit: int = 5) -> pd.DataFrame:
-        """테이블 샘플 데이터 조회"""
+        """테이블 샘플 데이터 조회 - 속성명 및 컬럼명 수정"""
         try:
             if table_name not in [
                 "PY_NP_TRMN_RMNY_TXN",
@@ -337,29 +499,76 @@ class DatabaseManager:
             ]:
                 raise ValueError(f"허용되지 않은 테이블: {table_name}")
 
-            # 개인정보 마스킹을 위한 컬럼 선택
-            if table_name in ["PY_NP_TRMN_RMNY_TXN", "PY_NP_SBSC_RMNY_TXN"]:
-                sample_query = f"""
-                SELECT 
-                    SUBSTR(TEL_NO, 1, 3) || '****' || SUBSTR(TEL_NO, -4) as masked_phone,
-                    SVC_CONT_ID,
-                    {'PAY_AMT' if table_name == 'PY_NP_TRMN_RMNY_TXN' else 'SETL_AMT'} as SETL_AMT,
-                    {'ACHNG_COMM_CMPN_ID' if table_name == 'PY_NP_TRMN_RMNY_TXN' else 'BCHNG_COMM_CMPN_ID'} as COMM_CMPN_NM,
-                    {'ACHNG_COMM_CMPN_ID' if table_name == 'PY_NP_TRMN_RMNY_TXN' else 'BCHNG_COMM_CMPN_ID'} as transaction_date
-                FROM {table_name}
-                ORDER BY {'NP_TRMN_DATE' if table_name == 'PY_NP_TRMN_RMNY_TXN' else 'TRT_DATE'} DESC
-                LIMIT {limit}
-                """
-            else:  # PY_DEPAZ_BAS
-                sample_query = f"""
-                SELECT 
-                    SVC_CONT_ID,
-                    DEPAZ_AMT,
-                    RMNY_DATE as deposit_date
-                FROM {table_name}
-                ORDER BY RMNY_DATE DESC
-                LIMIT {limit}
-                """
+            # 데이터베이스 타입에 따른 쿼리 생성
+            if self.use_sample_data:  # SQLite 샘플 데이터
+                if table_name in ["PY_NP_TRMN_RMNY_TXN"]:
+                    sample_query = f"""
+                    SELECT 
+                        SUBSTR(TEL_NO, 1, 3) || '****' || SUBSTR(TEL_NO, -4) as masked_phone,
+                        SVC_CONT_ID,
+                        PAY_AMT,
+                        BCHNG_COMM_CMPN_ID as operator,
+                        NP_TRMN_DATE as transaction_date
+                    FROM {table_name}
+                    ORDER BY NP_TRMN_DATE DESC
+                    LIMIT {limit}
+                    """
+                elif table_name == "PY_NP_SBSC_RMNY_TXN":
+                    sample_query = f"""
+                    SELECT 
+                        SUBSTR(TEL_NO, 1, 3) || '****' || SUBSTR(TEL_NO, -4) as masked_phone,
+                        SVC_CONT_ID,
+                        SETL_AMT,
+                        BCHNG_COMM_CMPN_ID as operator,
+                        TRT_DATE as transaction_date
+                    FROM {table_name}
+                    ORDER BY TRT_DATE DESC
+                    LIMIT {limit}
+                    """
+                else:  # PY_DEPAZ_BAS
+                    sample_query = f"""
+                    SELECT 
+                        SVC_CONT_ID,
+                        DEPAZ_AMT,
+                        DEPAZ_DIV_CD,
+                        RMNY_DATE as deposit_date
+                    FROM {table_name}
+                    ORDER BY RMNY_DATE DESC
+                    LIMIT {limit}
+                    """
+            else:  # Azure SQL Database
+                if table_name == "PY_NP_TRMN_RMNY_TXN":
+                    sample_query = f"""
+                    SELECT TOP {limit}
+                        SUBSTRING(HTEL_NO, 1, 3) + '****' + RIGHT(HTEL_NO, 4) as masked_phone,
+                        SVC_CONT_ID,
+                        PAY_AMT,
+                        COMM_CMPN_NM as operator,
+                        SETL_TRT_DATE as transaction_date
+                    FROM {table_name}
+                    ORDER BY SETL_TRT_DATE DESC
+                    """
+                elif table_name == "PY_NP_SBSC_RMNY_TXN":
+                    sample_query = f"""
+                    SELECT TOP {limit}
+                        SUBSTRING(HTEL_NO, 1, 3) + '****' + RIGHT(HTEL_NO, 4) as masked_phone,
+                        SVC_CONT_ID,
+                        SETL_AMT,
+                        COMM_CMPN_NM as operator,
+                        TRT_DATE as transaction_date
+                    FROM {table_name}
+                    ORDER BY TRT_DATE DESC
+                    """
+                else:  # PY_DEPAZ_BAS
+                    sample_query = f"""
+                    SELECT TOP {limit}
+                        SVC_CONT_ID,
+                        DEPAZ_AMT,
+                        COMM_CMPN_NM as operator,
+                        DPST_DT as deposit_date
+                    FROM {table_name}
+                    ORDER BY DPST_DT DESC
+                    """
 
             df, _ = self.execute_query(sample_query)
             return df
@@ -370,11 +579,11 @@ class DatabaseManager:
 
     def get_database_type(self) -> str:
         """현재 사용 중인 데이터베이스 타입 반환"""
-        return "Azure SQL Database" if self.use_azure else "SQLite"
+        return "Azure SQL Database" if self.use_sample_data else "SQLite"
 
     def is_azure_mode(self) -> bool:
         """Azure 모드 사용 여부 반환"""
-        return self.use_azure
+        return self.use_sample_data
 
     def get_connection_info(self) -> Dict[str, Any]:
         """연결 정보 반환"""
@@ -383,7 +592,7 @@ class DatabaseManager:
             "azure_ready": (
                 self.azure_config.is_production_ready() if self.azure_config else False
             ),
-            "use_azure": self.use_azure,
+            "use_sample_data": self.use_sample_data,
             "use_sample_data": self.use_sample_data,
             "connection_string_available": bool(self.connection_string),
             "sample_manager_available": bool(self.sample_manager),
@@ -396,7 +605,7 @@ class DatabaseManagerFactory:
 
     @staticmethod
     def create_manager(
-        azure_config=None, force_sample: bool = False
+        azure_config: AzureConfig, force_sample: bool = False
     ) -> DatabaseManager:
         """
         환경에 따라 적절한 데이터베이스 매니저 생성
@@ -408,12 +617,49 @@ class DatabaseManagerFactory:
         Returns:
             DatabaseManager 인스턴스
         """
-        # 개발 환경이거나 Azure 연결이 불가능한 경우 샘플 데이터 사용
-        use_sample = force_sample or not (
-            azure_config and azure_config.is_production_ready()
-        )
+        logger = logging.getLogger(__name__)
 
-        return DatabaseManager(azure_config, use_sample_data=use_sample)
+        # 1. 강제 샘플 모드
+        if force_sample:
+            logger.info("🔧 강제 샘플 모드로 실행")
+            try:
+                return DatabaseManager(azure_config, use_sample_data=True)
+            except Exception as e:
+                logger.error(f"샘플 모드 생성 실패: {e}")
+                raise Exception(f"샘플 데이터베이스 생성 실패: {e}")
+
+        # 2. Azure 우선 시도
+        logger.info("☁️ Azure 클라우드 연결 시도...")
+        try:
+            # Azure 서비스 상태 먼저 확인
+            connection_status = azure_config.test_connection()
+
+            if not connection_status["database"]:
+                logger.warning("Azure 데이터베이스 설정 불완전 - 샘플 모드로 전환")
+                return DatabaseManager(azure_config, use_sample_data=True)
+
+            # Azure 매니저 생성 시도
+            azure_manager = DatabaseManager(azure_config, use_sample_data=False)
+
+            if azure_manager.test_connection():
+                logger.info("✅ Azure 데이터베이스 연결 성공")
+                return azure_manager
+            else:
+                logger.warning("Azure 연결 테스트 실패 - 샘플 모드로 전환")
+                azure_manager.cleanup_connections()
+                return DatabaseManager(azure_config, use_sample_data=True)
+
+        except Exception as e:
+            logger.error(f"Azure 연결 실패: {e}")
+            logger.info("🔄 샘플 모드로 백업...")
+
+            try:
+                return DatabaseManager(azure_config, use_sample_data=True)
+            except Exception as sample_e:
+                logger.error(f"샘플 모드도 실패: {sample_e}")
+                raise Exception(
+                    f"모든 데이터베이스 연결 실패. Azure: {e}, Sample: {sample_e}"
+                )
 
     @staticmethod
     def create_azure_manager(azure_config) -> DatabaseManager:
@@ -424,7 +670,7 @@ class DatabaseManagerFactory:
         return DatabaseManager(azure_config, use_sample_data=False)
 
     @staticmethod
-    def create_sample_manager(azure_config=None) -> DatabaseManager:
+    def create_sample_manager(azure_config: AzureConfig) -> DatabaseManager:
         """샘플 데이터 전용 매니저 생성"""
         return DatabaseManager(azure_config, use_sample_data=True)
 
@@ -471,7 +717,7 @@ def test_database_manager():
 
                 # 쿼리 실행 테스트
                 print("\n🔍 Azure 쿼리 실행 테스트:")
-                if azure_manager.use_azure:
+                if azure_manager.use_sample_data:
                     test_query = """
                     SELECT TOP 1
                         COUNT(*) as total_count,

@@ -103,30 +103,30 @@ class SQLGenerator:
         schema_text = json.dumps(self.db_schema, ensure_ascii=False, indent=2)
 
         return f"""
-당신은 번호이동정산 데이터베이스를 위한 SQL 쿼리 생성 전문가입니다.
+        당신은 번호이동정산 데이터베이스를 위한 SQL 쿼리 생성 전문가입니다.
 
-## 데이터베이스 스키마:
-{schema_text}
+        ## 데이터베이스 스키마:
+        {schema_text}
 
-## 중요한 규칙:
-1. PY_NP_TRMN_RMNY_TXN은 포트아웃(해지) 데이터 - 일자: NP_TRMN_DATE
-2. PY_NP_SBSC_RMNY_TXN은 포트인(가입) 데이터 - 일자: TRT_DATE  
-3. PY_DEPAZ_BAS는 예치금 데이터 - 일자: RMNY_DATE
-4. 전화번호는 PY_NP_SBSC_RMNY_TXN.TEL_NO 또는 PY_NP_TRMN_RMNY_TXN.TEL_NO에서 조회
-5. 개인정보 보호: 휴대전화번호는 SUBSTR(TEL_NO, 1, 3) || '****' || SUBSTR(TEL_NO, -4) 형태로 마스킹
-6. 날짜 필터링 시 최근 3개월을 기본으로 설정
-7. 집계 쿼리 시 적절한 GROUP BY와 ORDER BY 사용
-8. 금액은 SUM, AVG 등 집계함수 사용 시 ROUND 적용
-9. SQLite 문법 사용 (strftime, date 함수 등)
+        ## 중요한 규칙:
+        1. PY_NP_TRMN_RMNY_TXN은 포트아웃(해지) 데이터 - 일자: NP_TRMN_DATE
+        2. PY_NP_SBSC_RMNY_TXN은 포트인(가입) 데이터 - 일자: TRT_DATE  
+        3. PY_DEPAZ_BAS는 예치금 데이터 - 일자: RMNY_DATE
+        4. 전화번호는 PY_NP_SBSC_RMNY_TXN.TEL_NO 또는 PY_NP_TRMN_RMNY_TXN.TEL_NO에서 조회
+        5. 개인정보 보호: 휴대전화번호는 SUBSTR(TEL_NO, 1, 3) || '****' || SUBSTR(TEL_NO, -4) 형태로 마스킹
+        6. 날짜 필터링 시 최근 3개월을 기본으로 설정
+        7. 집계 쿼리 시 적절한 GROUP BY와 ORDER BY 사용
+        8. 금액은 SUM, AVG 등 집계함수 사용 시 ROUND 적용
+        9. SQLite 문법 사용 (strftime, date 함수 등)
 
-## 쿼리 패턴:
-- 월별 집계: strftime('%Y-%m', date_column)
-- 최근 N개월: date('now', '-N months')
-- 금액 집계: SUM(SETL_AMT) 또는 SUM(DEPAZ_AMT)
+        ## 쿼리 패턴:
+        - 월별 집계: strftime('%Y-%m', date_column)
+        - 최근 N개월: date('now', '-N months')
+        - 금액 집계: SUM(SETL_AMT) 또는 SUM(DEPAZ_AMT)
 
-## 응답 형식:
-유효한 SQL 쿼리만 반환하세요. 설명이나 다른 텍스트는 포함하지 마세요.
-"""
+        ## 응답 형식:
+        유효한 SQL 쿼리만 반환하세요. 설명이나 다른 텍스트는 포함하지 마세요.
+        """
 
     def generate_sql(self, user_input: str) -> Tuple[str, bool]:
         """
@@ -285,41 +285,44 @@ class SQLGenerator:
     def _generate_monthly_trend_query(
         self, user_input: str, operator_filter: str, date_filter: str
     ) -> str:
-        """월별 추이 분석 쿼리 생성"""
+        """월별 추이 분석 쿼리 생성 - Azure SQL 문법"""
+
+        # date_filter를 Azure SQL 형식으로 변환
+        azure_date_filter = self._convert_to_azure_date_filter(date_filter)
 
         if "포트인" in user_input or "가입" in user_input:
             return f"""
             SELECT 
-                strftime('%Y-%m', TRT_DATE) as month,
-                BCHNG_COMM_CMPN_ID as operator_code,
+                FORMAT(TRT_DATE, 'yyyy-MM') as month,
+                COMM_CMPN_NM as operator_name,
                 COUNT(*) as transaction_count,
                 SUM(SETL_AMT) as total_amount,
-                ROUND(AVG(SETL_AMT), 0) as avg_amount,
+                ROUND(AVG(CAST(SETL_AMT AS FLOAT)), 0) as avg_amount,
                 MIN(SETL_AMT) as min_amount,
                 MAX(SETL_AMT) as max_amount
             FROM PY_NP_SBSC_RMNY_TXN 
-            WHERE TRT_DATE >= {date_filter} 
-                AND NP_STTUS_CD IN ('OK', 'WD')
+            WHERE TRT_DATE >= {azure_date_filter}
+                AND TRT_STUS_CD IN ('OK', 'WD')
                 {operator_filter}
-            GROUP BY strftime('%Y-%m', TRT_DATE), BCHNG_COMM_CMPN_ID
+            GROUP BY FORMAT(TRT_DATE, 'yyyy-MM'), COMM_CMPN_NM
             ORDER BY month DESC, total_amount DESC
             """
 
         elif "포트아웃" in user_input or "해지" in user_input:
             return f"""
             SELECT 
-                strftime('%Y-%m', NP_TRMN_DATE) as month,
-                BCHNG_COMM_CMPN_ID as operator_code,
+                FORMAT(SETL_TRT_DATE, 'yyyy-MM') as month,
+                COMM_CMPN_NM as operator_name,
                 COUNT(*) as transaction_count,
                 SUM(PAY_AMT) as total_amount,
-                ROUND(AVG(PAY_AMT), 0) as avg_amount,
+                ROUND(AVG(CAST(PAY_AMT AS FLOAT)), 0) as avg_amount,
                 MIN(PAY_AMT) as min_amount,
                 MAX(PAY_AMT) as max_amount
             FROM PY_NP_TRMN_RMNY_TXN 
-            WHERE NP_TRMN_DATE >= {date_filter} 
+            WHERE SETL_TRT_DATE >= {azure_date_filter}
                 AND NP_TRMN_DTL_STTUS_VAL IN ('1', '3')
                 {operator_filter}
-            GROUP BY strftime('%Y-%m', NP_TRMN_DATE), BCHNG_COMM_CMPN_ID
+            GROUP BY FORMAT(SETL_TRT_DATE, 'yyyy-MM'), COMM_CMPN_NM
             ORDER BY month DESC, total_amount DESC
             """
 
@@ -328,46 +331,60 @@ class SQLGenerator:
             return f"""
             WITH monthly_data AS (
                 SELECT 
-                    strftime('%Y-%m', TRT_DATE) as month,
+                    FORMAT(TRT_DATE, 'yyyy-MM') as month,
                     'PORT_IN' as port_type,
-                    BCHNG_COMM_CMPN_ID as operator_code,
+                    COMM_CMPN_NM as operator_name,
                     COUNT(*) as transaction_count,
                     SUM(SETL_AMT) as total_amount,
-                    ROUND(AVG(SETL_AMT), 0) as avg_amount
+                    ROUND(AVG(CAST(SETL_AMT AS FLOAT)), 0) as avg_amount
                 FROM PY_NP_SBSC_RMNY_TXN 
-                WHERE TRT_DATE >= {date_filter} 
-                    AND NP_STTUS_CD IN ('OK', 'WD')
+                WHERE TRT_DATE >= {azure_date_filter}
+                    AND TRT_STUS_CD IN ('OK', 'WD')
                     {operator_filter}
-                GROUP BY strftime('%Y-%m', TRT_DATE), BCHNG_COMM_CMPN_ID
+                GROUP BY FORMAT(TRT_DATE, 'yyyy-MM'), COMM_CMPN_NM
                 
                 UNION ALL
                 
                 SELECT 
-                    strftime('%Y-%m', NP_TRMN_DATE) as month,
+                    FORMAT(SETL_TRT_DATE, 'yyyy-MM') as month,
                     'PORT_OUT' as port_type,
-                    BCHNG_COMM_CMPN_ID as operator_code,
+                    COMM_CMPN_NM as operator_name,
                     COUNT(*) as transaction_count,
                     SUM(PAY_AMT) as total_amount,
-                    ROUND(AVG(PAY_AMT), 0) as avg_amount
+                    ROUND(AVG(CAST(PAY_AMT AS FLOAT)), 0) as avg_amount
                 FROM PY_NP_TRMN_RMNY_TXN 
-                WHERE NP_TRMN_DATE >= {date_filter} 
+                WHERE SETL_TRT_DATE >= {azure_date_filter}
                     AND NP_TRMN_DTL_STTUS_VAL IN ('1', '3')
                     {operator_filter}
-                GROUP BY strftime('%Y-%m', NP_TRMN_DATE), BCHNG_COMM_CMPN_ID
+                GROUP BY FORMAT(SETL_TRT_DATE, 'yyyy-MM'), COMM_CMPN_NM
             )
             SELECT 
                 month,
                 port_type,
-                operator_code,
+                operator_name,
                 transaction_count,
                 total_amount,
                 avg_amount
             FROM monthly_data
-            ORDER BY month DESC, operator_code, port_type
+            ORDER BY month DESC, operator_name, port_type
             """
 
+    def _convert_to_azure_date_filter(self, date_filter: str) -> str:
+        """날짜 필터를 Azure SQL 형식으로 변환"""
+        date_mapping = {
+            "date('now')": "CAST(GETDATE() AS DATE)",
+            "date('now', '-1 day')": "DATEADD(day, -1, GETDATE())",
+            "date('now', '-7 days')": "DATEADD(day, -7, GETDATE())",
+            "date('now', '-1 month')": "DATEADD(month, -1, GETDATE())",
+            "date('now', '-3 months')": "DATEADD(month, -3, GETDATE())",
+            "date('now', '-6 months')": "DATEADD(month, -6, GETDATE())",
+            "date('now', '-1 year')": "DATEADD(year, -1, GETDATE())",
+        }
+
+        return date_mapping.get(date_filter, "DATEADD(month, -3, GETDATE())")
+
     def _generate_phone_search_query(self, user_input: str) -> str:
-        """전화번호 검색 쿼리 생성"""
+        """전화번호 검색 쿼리 생성 - Azure SQL 문법"""
         phone_match = re.search(r"010[- ]?\d{4}[- ]?\d{4}", user_input)
         if phone_match:
             phone = phone_match.group().replace("-", "").replace(" ", "")
@@ -376,28 +393,28 @@ class SQLGenerator:
                 SELECT 
                     'PORT_IN' as port_type,
                     TRT_DATE as transaction_date,
-                    SUBSTR(TEL_NO, 1, 3) || '****' || SUBSTR(TEL_NO, -4) as masked_phone,
+                    SUBSTRING(HTEL_NO, 1, 3) + '****' + RIGHT(HTEL_NO, 4) as masked_phone,
                     SVC_CONT_ID,
                     SETL_AMT as settlement_amount,
-                    BCHNG_COMM_CMPN_ID as operator_code,
-                    NP_STTUS_CD as status,
-                    '포트인: ' || BCHNG_COMM_CMPN_ID || '에서 ' || ACHNG_COMM_CMPN_ID || '로 이동' as description
+                    COMM_CMPN_NM as operator_name,
+                    TRT_STUS_CD as status,
+                    '포트인: ' + COMM_CMPN_NM + '로 이동' as description
                 FROM PY_NP_SBSC_RMNY_TXN 
-                WHERE TEL_NO = '{phone}' AND NP_STTUS_CD IN ('OK', 'WD')
+                WHERE HTEL_NO = '{phone}' AND TRT_STUS_CD IN ('OK', 'WD')
                 
                 UNION ALL
                 
                 SELECT 
                     'PORT_OUT' as port_type,
-                    NP_TRMN_DATE as transaction_date,
-                    SUBSTR(TEL_NO, 1, 3) || '****' || SUBSTR(TEL_NO, -4) as masked_phone,
+                    SETL_TRT_DATE as transaction_date,
+                    SUBSTRING(HTEL_NO, 1, 3) + '****' + RIGHT(HTEL_NO, 4) as masked_phone,
                     SVC_CONT_ID,
                     PAY_AMT as settlement_amount,
-                    BCHNG_COMM_CMPN_ID as operator_code,
+                    COMM_CMPN_NM as operator_name,
                     NP_TRMN_DTL_STTUS_VAL as status,
-                    '포트아웃: ' || BCHNG_COMM_CMPN_ID || '에서 ' || ACHNG_COMM_CMPN_ID || '로 이동' as description
+                    '포트아웃: ' + COMM_CMPN_NM + '에서 이동' as description
                 FROM PY_NP_TRMN_RMNY_TXN 
-                WHERE TEL_NO = '{phone}' AND NP_TRMN_DTL_STTUS_VAL IN ('1', '3')
+                WHERE HTEL_NO = '{phone}' AND NP_TRMN_DTL_STTUS_VAL IN ('1', '3')
             )
             SELECT 
                 port_type,
@@ -405,7 +422,7 @@ class SQLGenerator:
                 masked_phone,
                 SVC_CONT_ID as service_contract_id,
                 settlement_amount,
-                operator_code,
+                operator_name,
                 status,
                 description
             FROM phone_history
@@ -416,38 +433,40 @@ class SQLGenerator:
     def _generate_operator_comparison_query(
         self, operator_filter: str, date_filter: str
     ) -> str:
-        """사업자별 현황 비교 쿼리 생성"""
+        """사업자별 현황 비교 쿼리 생성 - Azure SQL 문법"""
+        azure_date_filter = self._convert_to_azure_date_filter(date_filter)
+
         return f"""
         WITH operator_summary AS (
             SELECT 
-                BCHNG_COMM_CMPN_ID as operator_code,
+                COMM_CMPN_NM as operator_name,
                 'PORT_IN' as port_type,
                 COUNT(*) as transaction_count,
                 SUM(SETL_AMT) as total_amount,
-                ROUND(AVG(SETL_AMT), 0) as avg_amount,
+                ROUND(AVG(CAST(SETL_AMT AS FLOAT)), 0) as avg_amount,
                 MIN(SETL_AMT) as min_amount,
                 MAX(SETL_AMT) as max_amount
             FROM PY_NP_SBSC_RMNY_TXN
-            WHERE TRT_DATE >= {date_filter} 
-                AND NP_STTUS_CD IN ('OK', 'WD')
+            WHERE TRT_DATE >= {azure_date_filter}
+                AND TRT_STUS_CD IN ('OK', 'WD')
                 {operator_filter}
-            GROUP BY BCHNG_COMM_CMPN_ID
+            GROUP BY COMM_CMPN_NM
             
             UNION ALL
             
             SELECT 
-                BCHNG_COMM_CMPN_ID as operator_code,
+                COMM_CMPN_NM as operator_name,
                 'PORT_OUT' as port_type,
                 COUNT(*) as transaction_count,
                 SUM(PAY_AMT) as total_amount,
-                ROUND(AVG(PAY_AMT), 0) as avg_amount,
+                ROUND(AVG(CAST(PAY_AMT AS FLOAT)), 0) as avg_amount,
                 MIN(PAY_AMT) as min_amount,
                 MAX(PAY_AMT) as max_amount
             FROM PY_NP_TRMN_RMNY_TXN
-            WHERE NP_TRMN_DATE >= {date_filter} 
+            WHERE SETL_TRT_DATE >= {azure_date_filter}
                 AND NP_TRMN_DTL_STTUS_VAL IN ('1', '3')
                 {operator_filter}
-            GROUP BY BCHNG_COMM_CMPN_ID
+            GROUP BY COMM_CMPN_NM
         ),
         ranked_operators AS (
             SELECT 
@@ -457,7 +476,7 @@ class SQLGenerator:
             FROM operator_summary
         )
         SELECT 
-            operator_code,
+            operator_name,
             port_type,
             transaction_count,
             total_amount,
@@ -470,30 +489,32 @@ class SQLGenerator:
                 WHEN amount_rank = 1 THEN '🥇 1위'
                 WHEN amount_rank = 2 THEN '🥈 2위' 
                 WHEN amount_rank = 3 THEN '🥉 3위'
-                ELSE CAST(amount_rank AS TEXT) || '위'
+                ELSE CAST(amount_rank AS NVARCHAR(10)) + '위'
             END as ranking_display
         FROM ranked_operators
         ORDER BY port_type, amount_rank
         """
 
     def _generate_deposit_query(self, operator_filter: str, date_filter: str) -> str:
-        """예치금 현황 쿼리 생성"""
+        """예치금 현황 쿼리 생성 - Azure SQL 문법"""
+        azure_date_filter = self._convert_to_azure_date_filter(date_filter)
+
         return f"""
         SELECT 
-            BILL_ACC_ID as account_id,
+            BILL_ACNT_ID as account_id,
             COUNT(*) as deposit_count,
             SUM(DEPAZ_AMT) as total_deposit,
-            ROUND(AVG(DEPAZ_AMT), 0) as avg_deposit,
+            ROUND(AVG(CAST(DEPAZ_AMT AS FLOAT)), 0) as avg_deposit,
             MIN(DEPAZ_AMT) as min_deposit,
             MAX(DEPAZ_AMT) as max_deposit,
-            strftime('%Y-%m', RMNY_DATE) as deposit_month,
+            FORMAT(DPST_DT, 'yyyy-MM') as deposit_month,
             DEPAZ_DIV_CD as deposit_type,
             RMNY_METH_CD as payment_method
         FROM PY_DEPAZ_BAS
-        WHERE RMNY_DATE >= {date_filter}
+        WHERE DPST_DT >= {azure_date_filter}
             AND RMNY_METH_CD = 'NA'
             AND DEPAZ_DIV_CD = '10'
-        GROUP BY BILL_ACC_ID, strftime('%Y-%m', RMNY_DATE), DEPAZ_DIV_CD, RMNY_METH_CD
+        GROUP BY BILL_ACNT_ID, FORMAT(DPST_DT, 'yyyy-MM'), DEPAZ_DIV_CD, RMNY_METH_CD
         ORDER BY deposit_month DESC, total_deposit DESC
         """
 
@@ -611,23 +632,23 @@ class SQLGenerator:
         """
 
     def _get_default_query(self) -> str:
-        """기본 쿼리 반환"""
+        """기본 쿼리 반환 - Azure SQL 문법"""
         return """
         SELECT 
             'PORT_IN' as port_type,
             COUNT(*) as transaction_count,
             SUM(SETL_AMT) as total_amount,
-            ROUND(AVG(SETL_AMT), 0) as avg_amount
+            ROUND(AVG(CAST(SETL_AMT AS FLOAT)), 0) as avg_amount
         FROM PY_NP_SBSC_RMNY_TXN
-        WHERE TRT_DATE >= date('now', '-1 months') AND NP_STTUS_CD IN ('OK', 'WD')
+        WHERE TRT_DATE >= DATEADD(month, -1, GETDATE()) AND TRT_STUS_CD IN ('OK', 'WD')
         UNION ALL
         SELECT 
             'PORT_OUT' as port_type,
             COUNT(*) as transaction_count,
             SUM(PAY_AMT) as total_amount,
-            ROUND(AVG(PAY_AMT), 0) as avg_amount
+            ROUND(AVG(CAST(PAY_AMT AS FLOAT)), 0) as avg_amount
         FROM PY_NP_TRMN_RMNY_TXN
-        WHERE NP_TRMN_DATE >= date('now', '-1 months') AND NP_TRMN_DTL_STTUS_VAL IN ('1', '3')
+        WHERE SETL_TRT_DATE >= DATEADD(month, -1, GETDATE()) AND NP_TRMN_DTL_STTUS_VAL IN ('1', '3')
         """
 
     def _validate_sql(self, sql_query: str) -> bool:

@@ -23,106 +23,113 @@ class OpenAISQLGenerator:
     def _get_schema_info(self) -> str:
         """데이터베이스 스키마 정보 반환"""
         return """
-데이터베이스 스키마:
+                데이터베이스 스키마:
 
-1. PY_NP_SBSC_RMNY_TXN (포트인 - 가입번호이동 정산 테이블)
-   - TRT_DATE: 처리일자 (DATE)
-   - BCHNG_COMM_CMPN_ID: 변경전 통신사 (VARCHAR) - KT, SKT, LGU+ 등
-   - ACHNG_COMM_CMPN_ID: 변경후 통신사 (VARCHAR)
-   - TEL_NO: 전화번호 (VARCHAR) - 개인정보이므로 마스킹 필요
-   - SETL_AMT: 정산금액 (DECIMAL)
-   - NP_STTUS_CD: 상태코드 (VARCHAR) - 'OK', 'CN', 'WD'
-   - SVC_CONT_ID: 서비스계약ID (VARCHAR)
+                1. PY_NP_SBSC_RMNY_TXN (포트인 - 가입번호이동 정산 테이블)
+                - TRT_DATE: 처리일자 (DATE)
+                - BCHNG_COMM_CMPN_ID: 변경전 통신사 (VARCHAR) - KT, SKT, LGU+ 등
+                - ACHNG_COMM_CMPN_ID: 변경후 통신사 (VARCHAR)
+                - TEL_NO: 전화번호 (VARCHAR) - 개인정보이므로 마스킹 필요
+                - SETL_AMT: 정산금액 (DECIMAL)
+                - NP_STTUS_CD: 상태코드 (VARCHAR) - 'OK', 'CN', 'WD'
+                - SVC_CONT_ID: 서비스계약ID (VARCHAR)
 
-2. PY_NP_TRMN_RMNY_TXN (포트아웃 - 해지번호이동 정산 테이블)
-   - NP_TRMN_DATE: 번호이동해지일자 (DATE)
-   - BCHNG_COMM_CMPN_ID: 변경전 통신사 (VARCHAR)
-   - ACHNG_COMM_CMPN_ID: 변경후 통신사 (VARCHAR)
-   - TEL_NO: 전화번호 (VARCHAR) - 개인정보이므로 마스킹 필요
-   - PAY_AMT: 지급금액 (DECIMAL)
-   - NP_TRMN_DTL_STTUS_VAL: 상태값 (VARCHAR) - '1', '2', '3'
-   - SVC_CONT_ID: 서비스계약ID (VARCHAR)
+                2. PY_NP_TRMN_RMNY_TXN (포트아웃 - 해지번호이동 정산 테이블)
+                - NP_TRMN_DATE: 번호이동해지일자 (DATE)
+                - BCHNG_COMM_CMPN_ID: 변경전 통신사 (VARCHAR)
+                - ACHNG_COMM_CMPN_ID: 변경후 통신사 (VARCHAR)
+                - TEL_NO: 전화번호 (VARCHAR) - 개인정보이므로 마스킹 필요
+                - PAY_AMT: 지급금액 (DECIMAL)
+                - NP_TRMN_DTL_STTUS_VAL: 상태값 (VARCHAR) - '1', '2', '3'
+                - SVC_CONT_ID: 서비스계약ID (VARCHAR)
 
-3. PY_DEPAZ_BAS (예치금 기본 테이블)
-   - RMNY_DATE: 수납일자 (DATE)
-   - DEPAZ_AMT: 예치금액 (DECIMAL)
-   - DEPAZ_DIV_CD: 예치금구분 (VARCHAR) - '10': 입금, '90': 차감
-   - RMNY_METH_CD: 수납방법 (VARCHAR) - 'NA': 계좌이체, 'CA': 현금
-   - SVC_CONT_ID: 서비스계약ID (VARCHAR)
+                3. PY_DEPAZ_BAS (예치금 기본 테이블)
+                - RMNY_DATE: 수납일자 (DATE)
+                - DEPAZ_AMT: 예치금액 (DECIMAL)
+                - DEPAZ_DIV_CD: 예치금구분 (VARCHAR) - '10': 입금, '90': 차감
+                - RMNY_METH_CD: 수납방법 (VARCHAR) - 'NA': 계좌이체, 'CA': 현금
+                - SVC_CONT_ID: 서비스계약ID (VARCHAR)
 
-통신사 코드: KT, SKT, LGU+, KT MVNO, SKT MVNO, LGU+ MVNO
-"""
+                PY_NP_TRMN_RMNY_TXN.SVC_CONT_ID=PY_DEPAZ_BAS AND PY_NP_TRMN_RMNY_TXN.NP_TRMN_DATE=PY_DEPAZ_BAS.RMNY_DATE인 대상은 PY_NP_TRMN_RMNY_TXN.PAY_AMT=PY_DEPAZ_BAS.DEPAZ_AMT로 정산됨.
+
+                통신사 코드: KT, SKT, LGU+, KT MVNO, SKT MVNO, LGU+ MVNO
+                """
 
     def _get_example_queries(self) -> str:
         """예시 쿼리들 반환"""
         return """
-예시 쿼리:
+                예시 쿼리:
 
-1. 월별 포트인 현황:
-SELECT 
-    strftime('%Y-%m', TRT_DATE) as 월,
-    COUNT(*) as 건수,
-    SUM(SETL_AMT) as 총금액
-FROM PY_NP_SBSC_RMNY_TXN 
-WHERE TRT_DATE >= date('now', '-6 months')
-    AND NP_STTUS_CD IN ('OK', 'WD')
-GROUP BY strftime('%Y-%m', TRT_DATE)
-ORDER BY 월 DESC;
+                1. 월별 포트인 현황:
+                SELECT 
+                    strftime('%Y-%m', TRT_DATE) as 월,
+                    COUNT(*) as 건수,
+                    SUM(SETL_AMT) as 총금액
+                FROM PY_NP_SBSC_RMNY_TXN 
+                WHERE NP_STTUS_CD IN ('OK', 'WD')
+                GROUP BY strftime('%Y-%m', TRT_DATE)
+                ORDER BY 월 DESC;
 
-2. 사업자별 정산 현황:
-SELECT 
-    BCHNG_COMM_CMPN_ID as 사업자,
-    COUNT(*) as 번호이동건수,
-    SUM(SETL_AMT) as 총정산금액
-FROM PY_NP_SBSC_RMNY_TXN
-WHERE TRT_DATE >= date('now', '-3 months')
-    AND NP_STTUS_CD IN ('OK', 'WD')
-GROUP BY BCHNG_COMM_CMPN_ID
-ORDER BY 총정산금액 DESC;
+                2. 사업자별 정산 현황:
+                SELECT 
+                    BCHNG_COMM_CMPN_ID as 사업자,
+                    COUNT(*) as 번호이동건수,
+                    SUM(SETL_AMT) as 총정산금액
+                FROM PY_NP_SBSC_RMNY_TXN
+                WHERE NP_STTUS_CD IN ('OK', 'WD')
+                GROUP BY BCHNG_COMM_CMPN_ID
+                ORDER BY 총정산금액 DESC;
 
-3. 전화번호 검색 (개인정보 마스킹):
-SELECT 
-    SUBSTR(TEL_NO, 1, 3) || '****' || SUBSTR(TEL_NO, -4) as 마스킹전화번호,
-    TRT_DATE as 처리일자,
-    SETL_AMT as 정산금액
-FROM PY_NP_SBSC_RMNY_TXN 
-WHERE TEL_NO = '01012345678'
-    AND NP_STTUS_CD IN ('OK', 'WD');
-"""
+                3. 전화번호 검색하여 정산 데이터 검증 (개인정보 마스킹):
+                SELECT 
+                    'PORT_OUT' as 번호이동타입,
+                    SUBSTR(TEL_NO, 1, 3) || '****' || SUBSTR(TEL_NO, -4) as 전화번호,
+                    BCHNG_COMM_CMPN_ID as 변경전통신사,
+                    ACHNG_COMM_CMPN_ID as 변경후통신사,
+                    A.NP_TRMN_DATE as 번호이동일자,
+                    B.RMNY_DATE as 수납일자,
+                    A.PAY_AMT as 정산금액,
+                    B.DEPAZ_AMT as 예치금액,
+                FROM PY_NP_TRMN_RMNY_TXN A, PY_DEPZ_BAS B
+                WHERE AND A.NP_TRMN_DTL_STTUS_VAL IN ('1', '3')
+                    AND B.DEPAZ_DIV_CD = '10'
+                    A.SVC_CONT_ID = B.SVC_CONT_ID
+                    AND A.NP_TRMN_DATE = B.RMNY_DATE
+                """
 
     def _create_system_prompt(self, is_azure: bool = False) -> str:
         """시스템 프롬프트 생성"""
         db_type = "Azure SQL Database" if is_azure else "SQLite"
         date_functions = (
             """
-Azure SQL: DATEADD(month, -N, GETDATE()), FORMAT(date, 'yyyy-MM')
-SQLite: date('now', '-N months'), strftime('%Y-%m', date)
-"""
+            Azure SQL: DATEADD(month, -N, GETDATE()), FORMAT(date, 'yyyy-MM')
+            SQLite: date('now', '-N months'), strftime('%Y-%m', date)
+            """
             if is_azure
             else """
-SQLite: date('now', '-N months'), strftime('%Y-%m', date)
-"""
+                SQLite: date('now', '-N months'), strftime('%Y-%m', date)
+                """
         )
 
         return f"""
-당신은 번호이동정산 데이터를 분석하는 SQL 쿼리 생성 전문가입니다.
+                당신은 번호이동정산 데이터를 분석하는 SQL 쿼리 생성 전문가입니다.
 
-{self.db_schema}
+                {self.db_schema}
 
-{self.example_queries}
+                {self.example_queries}
 
-데이터베이스 타입: {db_type}
-날짜 함수: {date_functions}
+                데이터베이스 타입: {db_type}
+                날짜 함수: {date_functions}
 
-중요한 규칙:
-1. 개인정보 보호: 전화번호는 반드시 마스킹 (SUBSTR(TEL_NO, 1, 3) || '****' || SUBSTR(TEL_NO, -4))
-2. 유효한 데이터만: 포트인은 NP_STTUS_CD IN ('OK', 'WD'), 포트아웃은 NP_TRMN_DTL_STTUS_VAL IN ('1', '3')
-3. 최근 데이터 우선: 기본적으로 최근 3개월 데이터 조회
-4. 안전한 쿼리만: SELECT 문만 허용, DDL/DML 금지
-5. 한국어 컬럼 별칭 사용
+                중요한 규칙:
+                1. 개인정보 보호: 전화번호는 반드시 마스킹 (SUBSTR(TEL_NO, 1, 3) || '****' || SUBSTR(TEL_NO, -4))
+                2. 유효한 데이터만: 포트인은 NP_STTUS_CD IN ('OK', 'WD'), 포트아웃은 NP_TRMN_DTL_STTUS_VAL IN ('1', '3')
+                3. 최근 데이터 우선: 기본적으로 최근 3개월 데이터 조회
+                4. 안전한 쿼리만: SELECT 문만 허용, DDL/DML 금지
+                5. 한국어 컬럼 별칭 사용
 
-응답 형식: 유효한 SQL 쿼리만 반환하세요. 설명이나 다른 텍스트는 포함하지 마세요.
-"""
+                응답 형식: 유효한 SQL 쿼리만 반환하세요. 설명이나 다른 텍스트는 포함하지 마세요.
+                """
 
     def generate_sql_with_openai(
         self, user_input: str, is_azure: bool = False
@@ -311,6 +318,7 @@ def test_openai_sql_generator():
             "SK텔레콤 포트아웃 정산 내역 보여줘",
             "최근 3개월 예치금 현황",
             "사업자별 번호이동 건수 비교",
+            "전화번호 010-1234-5678의 포트아웃 정산 데이터 검증해줘",
         ]
 
         print("\n📋 테스트 결과:")

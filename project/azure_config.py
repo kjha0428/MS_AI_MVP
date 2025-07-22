@@ -3,6 +3,10 @@ import os
 from typing import Optional
 import logging
 
+# import pyodbc
+import pymssql
+from urllib.parse import quote_plus
+
 
 class AzureConfig:
     """환경변수 기반 Azure 설정 클래스 (Key Vault, 서비스 주체 없음)"""
@@ -12,10 +16,8 @@ class AzureConfig:
         # Azure OpenAI 설정 (환경변수에서 직접 로드)
         self.openai_api_key = os.getenv("AZURE_OPENAI_API_KEY")
         self.openai_endpoint = os.getenv("AZURE_OPENAI_ENDPOINT")
-        self.openai_api_version = os.getenv(
-            "AZURE_OPENAI_API_VERSION", "2024-02-15-preview"
-        )
-        self.openai_model_name = os.getenv("AZURE_OPENAI_MODEL_NAME", "gpt-4")
+        self.openai_api_version = os.getenv("AZURE_OPENAI_API_VERSION")
+        self.openai_model_name = os.getenv("AZURE_OPENAI_MODEL_NAME")
 
         # Azure SQL Database 설정 (환경변수에서 직접 로드)
         self.sql_connection_string = os.getenv("AZURE_SQL_CONNECTION_STRING")
@@ -93,75 +95,97 @@ class AzureConfig:
             return None
 
     def get_database_connection_string(self) -> Optional[str]:
-        """Azure SQL Database 연결 문자열 반환"""
-        if self.sql_connection_string:
-            self.logger.info("데이터베이스 연결 문자열 조회 성공")
-            return self.sql_connection_string
-        else:
-            self.logger.warning("데이터베이스 연결 문자열이 설정되지 않았습니다")
+        """SQLAlchemy용 연결 URL 반환 (None 체크 강화)"""
+        try:
+            server = os.getenv("AZURE_SQL_SERVER")
+            database = os.getenv("AZURE_SQL_DATABASE")
+            username = os.getenv("AZURE_SQL_USERNAME")
+            password = os.getenv("AZURE_SQL_PASSWORD")
+
+            # 🔥 수정: None 체크 강화
+            if not all([server, database, username, password]):
+                missing = []
+                if not server:
+                    missing.append("AZURE_SQL_SERVER")
+                if not database:
+                    missing.append("AZURE_SQL_DATABASE")
+                if not username:
+                    missing.append("AZURE_SQL_USERNAME")
+                if not password:
+                    missing.append("AZURE_SQL_PASSWORD")
+
+                self.logger.warning(f"누락된 환경변수: {', '.join(missing)}")
+                return None
+
+            # .database.windows.net이 없으면 추가
+            if not server.endswith(".database.windows.net"):
+                server = f"{server}.database.windows.net"
+
+            # SQLAlchemy 연결 URL 생성 (pymssql 드라이버 사용)
+            user_encoded = quote_plus(username)
+            password_encoded = quote_plus(password)
+
+            connection_url = f"mssql+pymssql://{user_encoded}:{password_encoded}@{server}:1433/{database}?charset=utf8&timeout=30"
+
+            self.logger.info("SQLAlchemy 연결 URL 생성 성공")
+            return connection_url
+
+        except Exception as e:
+            self.logger.error(f"SQLAlchemy 연결 URL 생성 실패: {e}")
+            return None
+
+    def _get_available_sql_server_driver(self) -> Optional[str]:
+        """pymssql은 드라이버 확인이 불필요"""
+        try:
+            # 🔥 수정: pymssql은 별도 드라이버가 필요없음
+            self.logger.info("pymssql 사용 - ODBC 드라이버 불필요")
+            return "pymssql"  # 또는 이 메서드 자체를 제거
+
+        except Exception as e:
+            self.logger.error(f"pymssql 확인 실패: {e}")
             return None
 
     def test_database_connection(self) -> bool:
-        """Azure SQL Database 연결 테스트"""
-        if not self.sql_connection_string:
-            self.logger.warning("데이터베이스 연결 문자열이 없어 테스트를 건너뜁니다")
-            return False
-
+        """SQLAlchemy를 사용한 Azure SQL Database 연결 테스트"""
         try:
-            import pyodbc
+            from sqlalchemy import create_engine, text
 
-            # 짧은 타임아웃으로 연결 테스트
-            conn = pyodbc.connect(self.sql_connection_string, timeout=5)
-            cursor = conn.cursor()
-            cursor.execute("SELECT 1")
-            result = cursor.fetchone()
-            conn.close()
-
-            if result:
-                self.logger.info("Azure SQL Database 연결 테스트 성공")
-                return True
-            else:
-                self.logger.error("Azure SQL Database 테스트 쿼리 실패")
+            connection_url = self.get_database_connection_string()
+            if not connection_url:
+                self.logger.warning("데이터베이스 연결 URL이 없어 테스트를 건너뜁니다")
                 return False
 
-        except ImportError:
-            self.logger.warning(
-                "pyodbc가 설치되지 않아 SQL Server 연결을 테스트할 수 없습니다"
-            )
-            self.logger.info("설치 방법: pip install pyodbc")
-            return False
+            # SQLAlchemy 엔진으로 연결 테스트
+            engine = create_engine(connection_url, pool_timeout=10)
+
+            with engine.connect() as conn:
+                result = conn.execute(text("SELECT 1"))
+                row = result.fetchone()
+
+            if row:
+                self.logger.info("SQLAlchemy Azure SQL Database 연결 테스트 성공")
+                return True
+            else:
+                self.logger.error("SQLAlchemy Azure SQL Database 연결 테스트 실패")
+                return False
+
         except Exception as e:
-            self.logger.warning(f"Azure SQL Database 연결 테스트 실패: {e}")
+            self.logger.error(f"SQLAlchemy Azure SQL Database 연결 테스트 실패: {e}")
             return False
 
     def test_connection(self) -> dict:
         """Azure 서비스 연결 테스트"""
         results = {
-            "key_vault": False,  # 사용하지 않음
             "openai": False,
             "database": False,
             "errors": [],
         }
 
-        # Key Vault는 사용하지 않음을 명시
-        self.logger.info("Key Vault는 사용하지 않습니다 (환경변수 기반)")
+        # OpenAI 부분은 동일...
 
-        # OpenAI 설정 검증 (실제 API 호출은 하지 않음)
-        if self.openai_api_key and self.openai_endpoint:
-            try:
-                client = self.get_openai_client()
-                if client:
-                    results["openai"] = True
-                    self.logger.info("OpenAI 클라이언트 설정 검증 성공")
-                else:
-                    results["errors"].append("OpenAI 클라이언트 생성 실패")
-            except Exception as e:
-                results["errors"].append(f"OpenAI 설정 검증 실패: {str(e)}")
-        else:
-            results["errors"].append("OpenAI API 키 또는 엔드포인트가 설정되지 않음")
-
-        # Database 연결 테스트
-        if self.sql_connection_string:
+        # 🔥 수정: Database 연결 테스트 부분
+        connection_url = self.get_database_connection_string()
+        if connection_url:
             try:
                 if self.test_database_connection():
                     results["database"] = True
@@ -170,7 +194,7 @@ class AzureConfig:
             except Exception as e:
                 results["errors"].append(f"데이터베이스 연결 테스트 실패: {str(e)}")
         else:
-            results["errors"].append("데이터베이스 연결 문자열이 설정되지 않음")
+            results["errors"].append("데이터베이스 연결 정보가 설정되지 않음")
 
         return results
 
@@ -178,9 +202,9 @@ class AzureConfig:
         """운영 환경 준비 상태 확인"""
         # OpenAI와 Database 설정을 개별적으로 확인
         has_openai = bool(self.openai_api_key and self.openai_endpoint)
-        has_database = bool(
-            self.sql_connection_string and self.sql_connection_string.strip()
-        )
+
+        # Database 연결 문자열 생성 가능한지 확인
+        has_database = bool(self.get_database_connection_string())
 
         # 최소한 하나의 서비스가 완전히 설정되어 있어야 함
         is_ready = has_openai or has_database
@@ -200,7 +224,7 @@ class AzureConfig:
             "azure_openai_available": bool(
                 self.openai_api_key and self.openai_endpoint
             ),
-            "azure_sql_available": bool(self.sql_connection_string),
+            "azure_sql_available": bool(self.get_database_connection_string()),  # 수정
             "openai_model": self.openai_model_name,
             "openai_api_version": self.openai_api_version,
             "production_ready": self.is_production_ready(),
@@ -259,27 +283,10 @@ def setup_environment_guide():
         print(f"  현재상태: {status}")
         print(f"  예시: {info['example']}")
 
-    print(f"\n💡 설정 방법:")
-    print("1. .env 파일에 추가:")
-    print("   AZURE_OPENAI_API_KEY=your-api-key")
-    print("   AZURE_OPENAI_ENDPOINT=https://your-resource.openai.azure.com/")
-    print("   AZURE_SQL_CONNECTION_STRING=your-connection-string")
-
-    print("\n2. 환경변수로 설정:")
-    print("   export AZURE_OPENAI_API_KEY='your-api-key'")
-    print("   export AZURE_OPENAI_ENDPOINT='https://your-resource.openai.azure.com/'")
-
-    print("\n📝 참고사항:")
-    print("• Azure Key Vault는 사용하지 않습니다")
-    print("• 서비스 주체 인증은 필요하지 않습니다")
-    print("• OpenAI 또는 Database 중 하나만 설정해도 됩니다")
-    print("• 모든 설정은 환경변수로만 관리됩니다")
-
 
 def test_azure_services():
     """Azure 서비스 연결 테스트"""
     print("🔧 Azure 서비스 테스트를 시작합니다...")
-    print("(Key Vault 및 서비스 주체 없이 환경변수만 사용)")
 
     azure_config = get_azure_config()
 
@@ -300,7 +307,6 @@ def test_azure_services():
     test_results = azure_config.test_connection()
 
     print(f"\n📋 서비스 테스트 결과:")
-    print(f"🔐 Key Vault: ⚪ 사용하지 않음")
     print(f"🤖 OpenAI: {'✅ 성공' if test_results['openai'] else '❌ 실패'}")
     print(f"🗄️ Database: {'✅ 성공' if test_results['database'] else '❌ 실패'}")
 

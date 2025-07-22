@@ -14,7 +14,7 @@ azure-keyvault-secrets==4.7.0
 azure-identity==1.15.0
 
 # 데이터베이스 연결
-pyodbc==5.0.1
+pymssql==2.2.11
 SQLAlchemy==2.0.25
 
 # 환경 설정

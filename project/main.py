@@ -1,5 +1,6 @@
 # main.py - 번호이동정산 AI 분석 시스템 메인 애플리케이션 (Azure SQL Database 연동)
 import streamlit as st
+import os
 import pandas as pd
 import plotly.express as px
 import plotly.graph_objects as go
@@ -7,24 +8,27 @@ from plotly.subplots import make_subplots
 import re
 from datetime import datetime, timedelta
 import logging
+import re
+import traceback
 
 from azure_config import get_azure_config
 from sample_data import SampleDataManager
 from database_manager import DatabaseManagerFactory
-import openai
 from openai import AzureOpenAI
 import json
+
+# 프로젝트 모듈들
+from database_manager import DatabaseManagerFactory
+from azure_config import get_azure_config
+
+from dotenv import load_dotenv
 
 # 샘플 데이터 임포트
 from sample_data import create_sample_database
 
 # 환경변수 로드
-try:
-    from dotenv import load_dotenv
 
-    load_dotenv()
-except ImportError:
-    pass  # python-dotenv가 없어도 동작
+load_dotenv()
 
 OPENAI_AVAILABLE = True
 
@@ -130,97 +134,338 @@ logging.basicConfig(level=logging.INFO)
 logger = logging.getLogger(__name__)
 
 
-# 시스템 초기화
+# 🔥 임시 디버깅 코드 추가
+def debug_environment():
+    st.write("🔍 환경변수 디버깅:")
+    env_vars = [
+        "AZURE_SQL_SERVER",
+        "AZURE_SQL_DATABASE",
+        "AZURE_SQL_USERNAME",
+        "AZURE_SQL_PASSWORD",
+    ]
+    for var in env_vars:
+        value = os.getenv(var, "❌ 없음")
+        if "PASSWORD" in var and value != "❌ 없음":
+            value = "✅ 설정됨"
+        st.write(f"- {var}: {value}")
+
+
+# 데이터베이스 초기화
 @st.cache_resource
-def init_system():
-    """시스템 초기화"""
+# main.py - 완전히 안전한 초기화 함수
+
+
+@st.cache_resource
+def init_database_manager():
+    """안전한 데이터베이스 매니저 초기화"""
+
+    # 진행 상황 표시
+    progress_placeholder = st.empty()
+    status_placeholder = st.empty()
+
     try:
+        progress_placeholder.progress(0.1)
+        status_placeholder.info("🔧 Azure 설정을 로드하고 있습니다...")
+
         # Azure 설정 로드
         azure_config = get_azure_config()
 
-        # 데이터베이스 매니저 생성
-        db_manager = DatabaseManagerFactory.create_manager(azure_config)
+        progress_placeholder.progress(0.3)
 
-        # 샘플 데이터 매니저 생성
-        sample_manager = SampleDataManager(azure_config)
+        # 환경변수 확인
+        force_sample = os.getenv("FORCE_SAMPLE_MODE", "false").lower() == "true"
 
-        # 데이터베이스 연결 생성
-        conn = sample_manager.create_sample_database()
+        if force_sample:
+            status_placeholder.info("🔧 강제 샘플 모드로 설정됨")
+            progress_placeholder.progress(0.7)
 
-        return {
-            "azure_config": azure_config,
-            "db_manager": db_manager,
-            "sample_manager": sample_manager,
-            "connection": conn,
-            "is_azure": sample_manager.is_using_azure(),
-            "connection_info": sample_manager.get_connection_info(),
-            "success": True,
-        }
+            db_manager = DatabaseManagerFactory.create_sample_manager(azure_config)
+
+            progress_placeholder.progress(1.0)
+            status_placeholder.success("✅ 샘플 데이터베이스 연결 성공!")
+
+            # 성공 시 UI 정리
+            progress_placeholder.empty()
+            status_placeholder.empty()
+
+            return db_manager
+
+        # Azure 우선 시도
+        status_placeholder.info("☁️ Azure 클라우드 서비스 연결 중...")
+        progress_placeholder.progress(0.5)
+
+        try:
+            db_manager = DatabaseManagerFactory.create_manager(
+                azure_config, force_sample=False
+            )
+
+            progress_placeholder.progress(0.9)
+            status_placeholder.info("🔍 연결 테스트 중...")
+
+            if db_manager and db_manager.test_connection():
+                progress_placeholder.progress(1.0)
+
+                if db_manager.use_sample_data:
+                    status_placeholder.success("✅ 샘플 SQLite 데이터베이스 연결 성공!")
+                else:
+                    status_placeholder.success("✅ Azure SQL Database 연결 성공!")
+
+                # 성공 시 UI 정리
+                progress_placeholder.empty()
+                status_placeholder.empty()
+
+                return db_manager
+            else:
+                raise Exception("연결 테스트 실패")
+
+        except Exception as azure_e:
+            status_placeholder.warning(f"⚠️ Azure 연결 실패: {str(azure_e)[:100]}...")
+
+            # 방화벽 오류 처리
+            if "40615" in str(azure_e):
+                progress_placeholder.empty()
+                status_placeholder.empty()
+
+                st.error("🚨 Azure SQL Database 방화벽 차단!")
+
+                # IP 정보 추출
+                ip_match = re.search(r"IP address '([\d.]+)'", str(azure_e))
+                server_match = re.search(r"server '([^']+)'", str(azure_e))
+
+                if ip_match and server_match:
+                    current_ip = ip_match.group(1)
+                    server_name = server_match.group(1)
+
+                    col1, col2 = st.columns(2)
+                    with col1:
+                        st.info(f"🌐 현재 IP: `{current_ip}`")
+                    with col2:
+                        st.info(f"🗄️ 서버: `{server_name}`")
+
+                    st.markdown("### 🔧 해결 방법")
+                    st.markdown(
+                        f"""
+                    1. **Azure Portal** 접속: https://portal.azure.com
+                    2. **SQL Server 검색**: `{server_name.split('.')[0]}`
+                    3. **방화벽 설정**: "방화벽 및 가상 네트워크" 메뉴
+                    4. **IP 추가**: "클라이언트 IP 추가" 버튼 클릭
+                    5. **저장 후 새로고침**: 5분 후 페이지 새로고침
+                    """
+                    )
+
+                    with st.expander("💻 Azure CLI 명령어"):
+                        st.code(
+                            f"""
+                            az sql server firewall-rule create \\
+                                --resource-group your-resource-group \\
+                                --server {server_name.split('.')[0]} \\
+                                --name ip-{current_ip.replace('.', '-')} \\
+                                --start-ip-address {current_ip} \\
+                                --end-ip-address {current_ip}
+                            """,
+                            language="bash",
+                        )
+
+            # 샘플 모드로 백업
+            st.info("🔄 샘플 데이터 모드로 전환합니다...")
+            progress_placeholder.progress(0.8)
+
+            try:
+                sample_manager = DatabaseManagerFactory.create_sample_manager(
+                    azure_config
+                )
+
+                if sample_manager.test_connection():
+                    progress_placeholder.progress(1.0)
+                    status_placeholder.success("✅ 샘플 데이터베이스로 실행됩니다.")
+
+                    # 성공 시 UI 정리
+                    progress_placeholder.empty()
+                    status_placeholder.empty()
+
+                    return sample_manager
+                else:
+                    raise Exception("샘플 연결 테스트 실패")
+
+            except Exception as sample_e:
+                progress_placeholder.empty()
+                status_placeholder.empty()
+
+                st.error("❌ 샘플 데이터베이스 연결도 실패했습니다.")
+
+                # 상세 오류 정보
+                with st.expander("🐛 오류 상세 정보"):
+                    st.code(f"Azure 오류: {azure_e}")
+                    st.code(f"샘플 오류: {sample_e}")
+                    st.code(f"트레이스백:\n{traceback.format_exc()}")
+
+                # 문제 해결 가이드
+                st.markdown("### 🔧 문제 해결 가이드")
+                st.markdown(
+                    """
+                1. **Python 환경 확인**:
+                   ```bash
+                   pip install -r requirements.txt
+                   ```
+                
+                2. **Azure 설정 확인**:
+                   - `.env` 파일에 올바른 Azure 정보 입력
+                   - Azure 서비스 상태: https://status.azure.com
+                
+                3. **네트워크 확인**:
+                   - VPN 연결 상태
+                   - 방화벽 설정
+                   - 인터넷 연결
+                
+                4. **강제 샘플 모드**:
+                   ```bash
+                   export FORCE_SAMPLE_MODE=true
+                   streamlit run main.py
+                   ```
+                """
+                )
+
+                return None
 
     except Exception as e:
-        # 폴백: 기본 로컬 모드
-        conn = create_sample_database(force_local=True)
+        progress_placeholder.empty()
+        status_placeholder.empty()
+
+        st.error(f"❌ 시스템 초기화 실패: {e}")
+
+        with st.expander("🐛 시스템 오류 정보"):
+            st.code(f"오류: {e}")
+            st.code(f"트레이스백:\n{traceback.format_exc()}")
+
+        # 최후의 수단: 빈 샘플 데이터베이스 생성
+        st.info("🛠️ 최소한의 시스템으로 실행을 시도합니다...")
+
+        try:
+            # 최소한의 Azure Config 생성
+            from azure_config import AzureConfig
+
+            minimal_config = AzureConfig()
+
+            # 직접 SQLite 연결 생성
+            import sqlite3
+
+            # 메모리 DB 직접 생성
+            class MinimalManager:
+                def __init__(self):
+                    self.use_sample_data = True
+                    self.connection_type = "Minimal SQLite"
+                    self.connection = sqlite3.connect(
+                        ":memory:", check_same_thread=False
+                    )
+                    self._create_minimal_tables()
+
+                def _create_minimal_tables(self):
+                    cursor = self.connection.cursor()
+                    cursor.execute(
+                        "CREATE TABLE test (id INTEGER PRIMARY KEY, name TEXT)"
+                    )
+                    cursor.execute("INSERT INTO test (name) VALUES ('Sample Data')")
+                    self.connection.commit()
+
+                def test_connection(self):
+                    try:
+                        cursor = self.connection.cursor()
+                        cursor.execute("SELECT COUNT(*) FROM test")
+                        return True
+                    except:
+                        return False
+
+                def execute_query(self, query):
+                    return pd.DataFrame(
+                        [{"message": "최소 모드에서는 제한된 기능만 사용 가능합니다."}]
+                    ), {"success": True}
+
+            minimal_manager = MinimalManager()
+
+            if minimal_manager.test_connection():
+                st.success("✅ 최소 모드로 실행됩니다. (기능 제한)")
+                return minimal_manager
+
+        except Exception as minimal_e:
+            st.error(f"❌ 최소 모드 실행도 실패: {minimal_e}")
+
+        return None
 
 
 # 대시보드 데이터 조회 (수정된 버전)
-@st.cache_data(ttl=300)
-def get_dashboard_data(_conn, is_azure=False):
-    """대시보드용 데이터 조회"""
+@st.cache_data(ttl=300)  # 5분 캐시
+def get_dashboard_data(_db_manager):
+    """대시보드용 데이터 조회 - 안전한 처리"""
 
-    # 포트인 월별 집계 - 올바른 컬럼명 사용
-    port_in_query = """
-    SELECT 
-        {} as month,
-        COUNT(*) as count,
-        SUM(SETL_AMT) as amount,
-        BCHNG_COMM_CMPN_ID as operator
-    FROM PY_NP_SBSC_RMNY_TXN 
-    WHERE TRT_DATE >= {} 
-        AND NP_STTUS_CD IN ('OK', 'WD')
-    GROUP BY {}, BCHNG_COMM_CMPN_ID
-    ORDER BY month
-    """.format(
-        "FORMAT(TRT_DATE, 'yyyy-MM')" if is_azure else "strftime('%Y-%m', TRT_DATE)",
-        "DATEADD(month, -4, GETDATE())" if is_azure else "date('now', '-4 months')",
-        "FORMAT(TRT_DATE, 'yyyy-MM')" if is_azure else "strftime('%Y-%m', TRT_DATE)",
-    )
-
-    # 포트아웃 월별 집계 - 올바른 컬럼명 사용
-    port_out_query = """
-    SELECT 
-        {} as month,
-        COUNT(*) as count,
-        SUM(PAY_AMT) as amount,
-        BCHNG_COMM_CMPN_ID as operator
-    FROM PY_NP_TRMN_RMNY_TXN 
-    WHERE NP_TRMN_DATE IS NOT NULL 
-        AND NP_TRMN_DATE >= {}
-        AND NP_TRMN_DTL_STTUS_VAL IN ('1', '3')
-    GROUP BY {}, BCHNG_COMM_CMPN_ID
-    ORDER BY month
-    """.format(
-        (
-            "FORMAT(NP_TRMN_DATE, 'yyyy-MM')"
-            if is_azure
-            else "strftime('%Y-%m', NP_TRMN_DATE)"
-        ),
-        "DATEADD(month, -4, GETDATE())" if is_azure else "date('now', '-4 months')",
-        (
-            "FORMAT(NP_TRMN_DATE, 'yyyy-MM')"
-            if is_azure
-            else "strftime('%Y-%m', NP_TRMN_DATE)"
-        ),
-    )
+    if not _db_manager:
+        return pd.DataFrame(), pd.DataFrame()
 
     try:
-        port_in_df = pd.read_sql_query(port_in_query, _conn)
-        port_out_df = pd.read_sql_query(port_out_query, _conn)
-    except Exception as e:
-        st.error(f"데이터 조회 오류: {e}")
-        port_in_df = pd.DataFrame()
-        port_out_df = pd.DataFrame()
+        # 데이터베이스 타입에 따른 쿼리 선택
+        if _db_manager.use_sample_data:
+            # SQLite 샘플 데이터용 쿼리
+            port_in_query = """
+            SELECT 
+                strftime('%Y-%m', TRT_DATE) as month,
+                COUNT(*) as count,
+                SUM(SETL_AMT) as amount,
+                BCHNG_COMM_CMPN_ID as operator
+            FROM PY_NP_SBSC_RMNY_TXN 
+            WHERE TRT_DATE >= date('now', '-4 months')
+                AND NP_STTUS_CD IN ('OK', 'WD')
+            GROUP BY strftime('%Y-%m', TRT_DATE), BCHNG_COMM_CMPN_ID
+            ORDER BY month DESC
+            """
 
-    return port_in_df, port_out_df
+            port_out_query = """
+            SELECT 
+                strftime('%Y-%m', NP_TRMN_DATE) as month,
+                COUNT(*) as count,
+                SUM(PAY_AMT) as amount,
+                BCHNG_COMM_CMPN_ID as operator
+            FROM PY_NP_TRMN_RMNY_TXN 
+            WHERE NP_TRMN_DATE >= date('now', '-4 months')
+                AND NP_TRMN_DTL_STTUS_VAL IN ('1', '3')
+            GROUP BY strftime('%Y-%m', NP_TRMN_DATE), BCHNG_COMM_CMPN_ID
+            ORDER BY month DESC
+            """
+        else:
+            # Azure SQL Database용 쿼리
+            port_in_query = """
+            SELECT 
+                FORMAT(TRT_DATE, 'yyyy-MM') as month,
+                COUNT(*) as count,
+                SUM(SETL_AMT) as amount,
+                COMM_CMPN_NM as operator
+            FROM PY_NP_SBSC_RMNY_TXN 
+            WHERE TRT_DATE >= DATEADD(month, -4, GETDATE())
+                AND TRT_STUS_CD IN ('OK', 'WD')
+            GROUP BY FORMAT(TRT_DATE, 'yyyy-MM'), COMM_CMPN_NM
+            ORDER BY month DESC
+            """
+
+            port_out_query = """
+            SELECT 
+                FORMAT(SETL_TRT_DATE, 'yyyy-MM') as month,
+                COUNT(*) as count,
+                SUM(PAY_AMT) as amount,
+                COMM_CMPN_NM as operator
+            FROM PY_NP_TRMN_RMNY_TXN 
+            WHERE SETL_TRT_DATE >= DATEADD(month, -4, GETDATE())
+                AND NP_TRMN_DTL_STTUS_VAL IN ('1', '3')
+            GROUP BY FORMAT(SETL_TRT_DATE, 'yyyy-MM'), COMM_CMPN_NM
+            ORDER BY month DESC
+            """
+
+        # 쿼리 실행
+        port_in_df, _ = _db_manager.execute_query(port_in_query)
+        port_out_df, _ = _db_manager.execute_query(port_out_query)
+
+        return port_in_df, port_out_df
+
+    except Exception as e:
+        st.error(f"📊 대시보드 데이터 조회 오류: {e}")
+        return pd.DataFrame(), pd.DataFrame()
 
 
 def generate_sql_with_openai(user_input, azure_config, is_azure=False):
@@ -550,36 +795,30 @@ def generate_rule_based_sql_query(user_input, is_azure=False):
 
 # 메인 애플리케이션
 def main():
-    # 시스템 초기화
-    system_info = init_system()
+    # 데이터베이스 매니저 초기화 (Azure 우선)
+    db_manager = init_database_manager()
 
-    azure_config = system_info["azure_config"]
-    db_manager = system_info["db_manager"]
-    sample_manager = system_info["sample_manager"]
-    conn = system_info["connection"]
-    is_azure = system_info["is_azure"]
-    connection_info = system_info["connection_info"]
+    if not db_manager:
+        st.error("🔥 데이터베이스 연결에 실패했습니다. 시스템 관리자에게 문의하세요.")
+        st.stop()
 
     # 헤더
     st.markdown(
         """
     <div class="main-header">
         <h1>📊 번호이동정산 AI 분석 시스템</h1>
-        <p>🤖 Azure OpenAI 기반 자연어 쿼리 생성 및 실시간 대시보드</p>
-        <p><small>✨ 데이터 기반 의사결정을 위한 스마트 분석 플랫폼</small></p>
+        <p>🤖 Azure 클라우드 기반 실시간 데이터 분석 플랫폼</p>
+        <p><small>✨ Azure SQL Database + OpenAI GPT-4 연동</small></p>
     </div>
     """,
         unsafe_allow_html=True,
     )
 
-    # 연결 상태 표시
-    display_connection_status(connection_info, system_info.get("fallback", False))
-
     # 실시간 대시보드
     st.header("📈 번호이동 추이 분석 대시보드")
 
-    with st.spinner("📊 최신 데이터를 분석하고 있습니다..."):
-        port_in_df, port_out_df = get_dashboard_data(conn, is_azure)
+    with st.spinner("📊 Azure 데이터베이스에서 최신 데이터를 분석하고 있습니다..."):
+        port_in_df, port_out_df = get_dashboard_data(db_manager)
 
     # 메트릭 카드 표시
     display_metrics(port_in_df, port_out_df)
@@ -590,11 +829,11 @@ def main():
     # 구분선
     st.markdown("---")
 
-    # AI 챗봇 섹션
-    display_chatbot(conn, is_azure, system_info)
+    # AI 챗봇 섹션 (DatabaseManager 전달)
+    display_chatbot(db_manager)
 
-    # 사이드바
-    display_sidebar(conn, system_info)
+    # 사이드바 (DatabaseManager 전달)
+    display_sidebar(db_manager)
 
 
 def display_connection_status(connection_info, is_fallback=False):
@@ -810,150 +1049,109 @@ def display_charts(port_in_df, port_out_df):
         st.info("📊 표시할 데이터가 없습니다. 샘플 데이터를 생성해주세요.")
 
 
-def display_chatbot(_conn, is_azure, system_info):
-    """AI 챗봇 인터페이스 (OpenAI 우선 사용)"""
+def display_chatbot(db_manager):
+    """AI 챗봇 인터페이스 - DatabaseManager 사용"""
 
-    # Azure 설정 가져오기
-    azure_config = None
-    openai_available = False
+    st.header("🤖 Azure OpenAI 기반 자연어 SQL 쿼리 생성")
 
-    try:
-        azure_config = system_info.get("azure_config")
-        if not azure_config:
-            from azure_config import get_azure_config
+    # Azure 설정으로 SQL 생성기 초기화
+    if "sql_generator" not in st.session_state:
+        from sql_generator import SQLGenerator
 
-            azure_config = get_azure_config()
-
-        # OpenAI 사용 가능 여부 확인
-        if (
-            azure_config
-            and hasattr(azure_config, "openai_api_key")
-            and azure_config.openai_api_key
-            and hasattr(azure_config, "openai_endpoint")
-            and azure_config.openai_endpoint
-        ):
-            openai_available = True
-
-    except Exception as config_error:
-        st.warning(f"Azure 설정 로드 실패: {config_error}")
-        azure_config = None
-
-    # AI 상태 표시 (더 명확하게)
-    if openai_available:
-        st.success("🤖 Azure OpenAI 사용 가능 - 자연어 질문을 SQL로 자동 변환")
-        st.info(
-            "💡 예: '지난 3개월 동안 SK텔레콤에서 LG유플러스로 이동한 고객 수와 정산 금액을 월별로 보여줘'"
-        )
-    else:
-        st.warning(
-            "📋 규칙 기반 쿼리 생성만 사용 가능 - 미리 정의된 패턴으로 쿼리 생성"
-        )
-        st.info(
-            "💡 예: '월별 포트인 현황', 'SK텔레콤 포트아웃 현황', '010-1234-5678 번호 조회'"
-        )
-
-    # DB 타입 표시
-    db_type_info = "☁️ Azure SQL Database" if is_azure else "💻 SQLite"
-    st.info(f"현재 연결: {db_type_info}")
+        azure_config = get_azure_config()
+        st.session_state.sql_generator = SQLGenerator(azure_config)
 
     # 채팅 히스토리 초기화
     if "chat_history" not in st.session_state:
         st.session_state.chat_history = []
 
-    # 예시 쿼리 버튼들 (OpenAI 사용 가능 여부에 따라 다른 예시 제공)
+    # 예시 쿼리 버튼들
     st.subheader("💡 빠른 쿼리 예시")
 
-    if openai_available:
-        # OpenAI 사용 가능한 경우 - 더 복잡한 자연어 예시
-        col1, col2, col3 = st.columns(3)
+    col1, col2, col3 = st.columns(3)
 
-        with col1:
-            if st.button("🤖 AI: 월별 포트인 분석"):
-                st.session_state.user_input = "지난 6개월 동안 월별 포트인 현황을 사업자별로 분석해서 총 건수, 총 금액, 평균 정산액을 보여줘"
+    with col1:
+        if st.button("📊 월별 포트인 현황"):
+            st.session_state.user_input = "월별 포트인 현황을 알려줘"
 
-        with col2:
-            if st.button("🤖 AI: 사업자 비교 분석"):
-                st.session_state.user_input = (
-                    "SK텔레콤, KT, LG유플러스 간의 포트인/포트아웃 현황을 비교 분석해줘"
-                )
+    with col2:
+        if st.button("🔍 특정 번호 조회"):
+            st.session_state.user_input = (
+                "HTEL_NO가 01012345678인 번호의 정산 내역 확인해줘"
+            )
 
-        with col3:
-            if st.button("🤖 AI: 정산 패턴 분석"):
-                st.session_state.user_input = "최근 3개월 예치금 수납 패턴을 월별로 분석하고 평균, 최대, 최소 금액을 알려줘"
+    with col3:
+        if st.button("📈 사업자별 집계"):
+            st.session_state.user_input = "COMM_CMPN_NM별 번호이동 정산 현황 보여줘"
 
-        # 추가 AI 예시
-        st.markdown("### 🧠 고급 AI 쿼리 예시")
-        ai_examples = [
-            "특정 번호 010-1234-5678의 전체 번호이동 이력과 정산 내역을 시간순으로 정리해줘",
-            "지난 달 대비 이번 달 포트인 증감률을 사업자별로 계산해줘",
-            "정산 금액이 평균보다 높은 거래들의 패턴을 분석해줘",
-            "주요 사업자별 고객 유치(포트인) 대비 이탈(포트아웃) 비율을 계산해줘",
-        ]
-    else:
-        # OpenAI 사용 불가능한 경우 - 기본 규칙 기반 예시
-        col1, col2, col3 = st.columns(3)
+    # 추가 예시들
+    st.markdown("### 🎯 더 많은 예시")
+    examples = [
+        "최근 3개월 포트아웃 현황 알려줘",
+        "DEPAZ_AMT 합계를 COMM_CMPN_NM별로 보여줘",
+        "월별 SETL_AMT 추이 분석해줘",
+        "SETL_TRT_DATE가 최근 1개월인 데이터 요약해줘",
+    ]
 
-        with col1:
-            if st.button("📊 월별 포트인 현황"):
-                st.session_state.user_input = "월별 포트인 현황을 알려줘"
-
-        with col2:
-            if st.button("🔍 특정 번호 조회"):
-                st.session_state.user_input = "010-1234-5678 번호의 정산 내역 확인해줘"
-
-        with col3:
-            if st.button("📈 사업자별 집계"):
-                st.session_state.user_input = "사업자별 번호이동 정산 현황 보여줘"
-
-        # 기본 예시
-        st.markdown("### 🎯 규칙 기반 쿼리 예시")
-        ai_examples = [
-            "SK텔레콤 포트아웃 현황 알려줘",
-            "최근 3개월 예치금 현황 보여줘",
-            "월별 번호이동 추이 분석해줘",
-            "LG유플러스 관련 정산 내역 확인해줘",
-        ]
-
-    # 예시 버튼들 표시
-    for i, example in enumerate(ai_examples):
+    for i, example in enumerate(examples):
         if st.button(f"💬 {example}", key=f"example_{i}"):
             st.session_state.user_input = example
 
     # 사용자 입력
-    placeholder_text = (
-        "예: '지난 3개월 SK텔레콤 포트인 고객의 평균 정산액과 월별 추이를 분석해줘'"
-        if openai_available
-        else "예: '2024년 1월 SK텔레콤 포트인 정산 금액 알려줘'"
-    )
-
     user_input = st.text_input(
-        "💬 질문을 입력하세요:", key="user_input", placeholder=placeholder_text
+        "💬 질문을 입력하세요:",
+        key="user_input",
+        placeholder="예: '최근 3개월 COMM_CMPN_NM별 SETL_AMT 합계 알려줘'",
     )
 
-    if st.button("🚀 쿼리 생성 및 실행") and user_input:
-        query_method = "AI (OpenAI)" if openai_available else "규칙 기반"
-
-        with st.spinner(f"🤖 {query_method} 방식으로 쿼리를 생성하고 실행 중입니다..."):
+    if st.button("🚀 Azure AI로 쿼리 생성 및 실행") and user_input:
+        with st.spinner("🤖 Azure OpenAI가 쿼리를 생성하고 실행 중입니다..."):
             try:
-                # SQL 쿼리 생성 (OpenAI 우선, azure_config 전달)
-                sql_query = generate_sql_query(user_input, is_azure, azure_config)
+                # SQL 쿼리 생성 (AI 기반)
+                sql_query, is_ai_generated = (
+                    st.session_state.sql_generator.generate_sql(user_input)
+                )
+
+                # AI 생성 여부 표시
+                if is_ai_generated:
+                    st.success("✅ Azure OpenAI GPT-4가 쿼리를 생성했습니다!")
+                else:
+                    st.info("ℹ️ 규칙 기반으로 쿼리를 생성했습니다.")
 
                 # 쿼리 실행
-                result_df = pd.read_sql_query(sql_query, _conn)
+                result_df, metadata = db_manager.execute_query(sql_query)
 
                 # 결과 표시
-                success_message = (
-                    f"✅ {query_method}로 쿼리가 성공적으로 실행되었습니다!"
-                )
                 st.markdown(
-                    f'<div class="success-alert">{success_message}</div>',
+                    """
+                <div class="success-alert">
+                    ✅ Azure SQL Database에서 쿼리가 성공적으로 실행되었습니다!
+                </div>
+                """,
                     unsafe_allow_html=True,
                 )
+
+                # 실행 메타데이터 표시
+                col1, col2, col3 = st.columns(3)
+                with col1:
+                    st.metric("실행 시간", f"{metadata['execution_time']}초")
+                with col2:
+                    st.metric("결과 행수", f"{metadata['row_count']:,}행")
+                with col3:
+                    st.metric("AI 생성", "✅" if is_ai_generated else "❌")
 
                 # 생성된 SQL 표시
                 with st.expander("🔍 생성된 SQL 쿼리 보기"):
                     st.code(sql_query, language="sql")
-                    st.caption(f"생성 방식: {query_method}")
+
+                    # 쿼리 설명 추가
+                    if hasattr(st.session_state.sql_generator, "get_query_explanation"):
+                        explanation = (
+                            st.session_state.sql_generator.get_query_explanation(
+                                sql_query
+                            )
+                        )
+                        st.info(f"📝 쿼리 설명: {explanation}")
 
                 # 결과 데이터 표시
                 if not result_df.empty:
@@ -968,7 +1166,7 @@ def display_chatbot(_conn, is_azure, system_info):
                     st.download_button(
                         label="📥 결과 데이터 다운로드 (CSV)",
                         data=csv,
-                        file_name=f"query_result_{datetime.now().strftime('%Y%m%d_%H%M%S')}.csv",
+                        file_name=f"azure_query_result_{datetime.now().strftime('%Y%m%d_%H%M%S')}.csv",
                         mime="text/csv",
                     )
                 else:
@@ -980,42 +1178,37 @@ def display_chatbot(_conn, is_azure, system_info):
                         "user": user_input,
                         "sql": sql_query,
                         "result_count": len(result_df) if not result_df.empty else 0,
+                        "execution_time": metadata["execution_time"],
+                        "is_ai_generated": is_ai_generated,
                         "timestamp": datetime.now().strftime("%Y-%m-%d %H:%M:%S"),
-                        "db_type": "Azure SQL" if is_azure else "SQLite",
-                        "query_method": query_method,
                     }
                 )
 
             except Exception as e:
-                error_message = f"❌ 쿼리 실행 중 오류가 발생했습니다: {str(e)}"
                 st.markdown(
-                    f'<div class="error-alert">{error_message}</div>',
+                    f"""
+                <div class="error-alert">
+                    ❌ 쿼리 실행 중 오류가 발생했습니다: {str(e)}
+                </div>
+                """,
                     unsafe_allow_html=True,
                 )
+                st.info("💡 다른 방식으로 질문해보시거나 예시 쿼리를 사용해보세요.")
 
-                if openai_available:
-                    st.info(
-                        "💡 AI 쿼리 생성에 실패했습니다. 더 구체적으로 질문하거나 예시 쿼리를 사용해보세요."
-                    )
-                else:
-                    st.info(
-                        "💡 규칙 기반 쿼리 생성에 실패했습니다. 미리 정의된 패턴으로 질문해보시거나 예시 쿼리를 사용해보세요."
-                    )
-
-    # 채팅 히스토리 표시 (쿼리 생성 방식 정보 포함)
+    # 채팅 히스토리 표시
     if st.session_state.chat_history:
         st.subheader("📝 최근 쿼리 히스토리")
         with st.expander("히스토리 보기"):
             for chat in reversed(st.session_state.chat_history[-5:]):
-                query_method_info = chat.get("query_method", "알 수 없음")
+                ai_badge = "🤖 AI" if chat.get("is_ai_generated", False) else "📏 규칙"
                 st.markdown(
                     f"""
                 <div class="chat-container">
                     <strong>🗣️ 질문:</strong> {chat['user']}<br>
                     <strong>⏰ 시간:</strong> {chat['timestamp']}<br>
                     <strong>📊 결과:</strong> {chat['result_count']}건<br>
-                    <strong>🗄️ DB:</strong> {chat.get('db_type', 'Unknown')}<br>
-                    <strong>🤖 생성방식:</strong> {query_method_info}
+                    <strong>⚡ 실행시간:</strong> {chat.get('execution_time', 'N/A')}초<br>
+                    <strong>🎯 생성방식:</strong> {ai_badge}
                 </div>
                 """,
                     unsafe_allow_html=True,
@@ -1073,156 +1266,126 @@ def create_result_visualization(df):
         st.plotly_chart(fig, use_container_width=True)
 
 
-def display_sidebar(_conn, system_info):
-    """사이드바 표시"""
+def display_sidebar(db_manager):
+    """사이드바 표시 - DatabaseManager 사용"""
 
     with st.sidebar:
-        st.header("🔧 시스템 정보")
+        st.header("🔧 Azure 클라우드 시스템 정보")
 
-        # 연결 정보 표시
-        connection_info = system_info["connection_info"]
-        is_azure = system_info["is_azure"]
+        # Azure 서비스 상태 확인
+        from azure_config import get_azure_config
 
-        st.subheader("🔗 데이터베이스 연결")
-        if is_azure:
-            st.success("☁️ Azure SQL Database")
-            st.info("🔵 운영 모드")
-        else:
-            st.warning("💻 로컬 SQLite")
-            st.info("🟡 개발 모드 (샘플 데이터)")
+        azure_config = get_azure_config()
+        connection_status = azure_config.test_connection()
+
+        # Azure 서비스 상태 표시
+        st.subheader("☁️ Azure 서비스 상태")
+        st.metric(
+            "🤖 OpenAI", "✅ 연결됨" if connection_status["openai"] else "❌ 연결 실패"
+        )
+        st.metric(
+            "🗄️ SQL Database",
+            "✅ 연결됨" if connection_status["database"] else "❌ 연결 실패",
+        )
 
         # 데이터베이스 현황
-        st.subheader("📊 데이터 현황")
-        try:
-            if is_azure:
-                # Azure SQL Database 쿼리
-                port_in_count = pd.read_sql_query(
-                    "SELECT COUNT(*) as count FROM PY_NP_SBSC_RMNY_TXN WHERE NP_STTUS_CD IN ('OK', 'WD')",
-                    _conn,
-                ).iloc[0]["count"]
-                port_out_count = pd.read_sql_query(
-                    "SELECT COUNT(*) as count FROM PY_NP_TRMN_RMNY_TXN WHERE NP_TRMN_DTL_STTUS_VAL IN ('1', '3')",
-                    _conn,
-                ).iloc[0]["count"]
-                deposit_count = pd.read_sql_query(
-                    "SELECT COUNT(*) as count FROM PY_DEPAZ_BAS WHERE DEPAZ_DIV_CD = '10'",
-                    _conn,
-                ).iloc[0]["count"]
-            else:
-                # SQLite 쿼리
-                port_in_count = pd.read_sql_query(
-                    "SELECT COUNT(*) as count FROM PY_NP_SBSC_RMNY_TXN", _conn
-                ).iloc[0]["count"]
-                port_out_count = pd.read_sql_query(
-                    "SELECT COUNT(*) as count FROM PY_NP_TRMN_RMNY_TXN", _conn
-                ).iloc[0]["count"]
-                deposit_count = pd.read_sql_query(
-                    "SELECT COUNT(*) as count FROM PY_DEPAZ_BAS", _conn
-                ).iloc[0]["count"]
+        if db_manager:
+            st.subheader("📊 데이터베이스 현황")
 
-            st.metric("📥 포트인 데이터", f"{port_in_count:,}건")
-            st.metric("📤 포트아웃 데이터", f"{port_out_count:,}건")
-            st.metric("💰 예치금 데이터", f"{deposit_count:,}건")
+            try:
+                # 성능 통계 가져오기
+                perf_stats = db_manager.get_performance_stats()
 
-        except Exception as e:
-            st.error(f"데이터 조회 오류: {e}")
+                st.info(f"🔗 연결 타입: {perf_stats['connection_type']}")
+                st.success(perf_stats["connection_status"])
+
+                # 테이블 정보 표시
+                if "tables" in perf_stats:
+                    st.subheader("📋 테이블 현황")
+                    for table_name, table_info in perf_stats["tables"].items():
+                        with st.expander(f"📊 {table_name}"):
+                            st.metric(
+                                "총 행 수", f"{table_info.get('row_count', 0):,}건"
+                            )
+                            st.metric(
+                                "최신 데이터", table_info.get("latest_date", "N/A")
+                            )
+                            st.write(f"상태: {table_info.get('status', 'N/A')}")
+
+            except Exception as e:
+                st.error(f"데이터베이스 상태 조회 실패: {e}")
 
         st.markdown("---")
 
-        # Azure 서비스 상태
-        st.subheader("⚙️ Azure 서비스 상태")
-        azure_config = system_info["azure_config"]
+        # 시스템 상태
+        st.subheader("⚙️ 시스템 상태")
 
-        try:
-            # Azure 연결 테스트
-            test_results = azure_config.test_connection()
-
-            st.write(
-                "🤖 OpenAI:", "✅ 연결됨" if test_results["openai"] else "❌ 연결 실패"
-            )
-            st.write(
-                "🗄️ Database:",
-                "✅ 연결됨" if test_results["database"] else "❌ 연결 실패",
-            )
-
-            st.subheader("⚙️ Azure 서비스 상태")
-            if azure_config and azure_config.is_production_ready():
-                st.success("☁️ Azure 서비스 사용 가능")
-            else:
-                st.warning("💻 로컬 모드 사용")
-
-        except Exception as e:
-            st.error(f"Azure 상태 확인 실패: {e}")
-
-        st.markdown("---")
-
-        # 데이터 관리
-        st.subheader("🗂️ 데이터 관리")
-
-        if is_azure:
-            # Azure 모드에서 샘플 데이터 관리
-            col1, col2 = st.columns(2)
-
-            with col1:
-                if st.button("🔄 데이터 새로고침"):
-                    st.cache_data.clear()
-                    st.rerun()
-
-            with col2:
-                if st.button("🧹 샘플 데이터 정리"):
-                    try:
-                        sample_manager = system_info["sample_manager"]
-                        sample_manager.cleanup_sample_data(_conn)
-                        st.success("샘플 데이터 정리 완료")
-                        st.cache_data.clear()
-                        st.rerun()
-                    except Exception as e:
-                        st.error(f"정리 실패: {e}")
-
-            # 강제 로컬 모드 전환
-            if st.button("💻 로컬 모드로 전환"):
-                st.cache_resource.clear()
-                st.session_state.clear()
-                st.rerun()
-
+        # 운영 환경 준비 상태
+        production_ready = azure_config.is_production_ready()
+        if production_ready:
+            st.success("🟢 Azure 클라우드 연결됨")
+            st.success("🟢 운영 모드 활성화")
         else:
-            # 로컬 모드에서의 데이터 관리
-            if st.button("🔄 데이터 새로고침"):
-                st.cache_data.clear()
-                st.cache_resource.clear()
-                st.rerun()
+            st.warning("🟡 일부 Azure 서비스 연결 실패")
+            st.info("🔵 개발 모드로 실행")
 
-            # Azure 모드 시도
-            if st.button("☁️ Azure 모드 시도"):
-                st.cache_resource.clear()
-                st.session_state.clear()
-                st.rerun()
+        st.success("🟢 Streamlit 서버 실행중")
 
-        st.markdown("---")
+        # 에러 정보 표시
+        if connection_status.get("errors"):
+            st.subheader("⚠️ 연결 오류")
+            for error in connection_status["errors"][:3]:  # 최대 3개만 표시
+                st.error(f"• {error}")
 
         # 사용법 안내
-        st.subheader("💡 사용법 안내")
+        st.markdown("---")
+        st.subheader("💡 Azure AI 사용법")
         st.markdown(
             """
-        **쿼리 예시:**
-        - "월별 포트인 현황"
-        - "SK텔레콤 정산 내역"
-        - "010-1234-5678 번호 조회"
-        - "사업자별 비교"
-        - "예치금 현황"
+        **자연어 쿼리 예시:**
+        - "최근 3개월 포트인 현황"
+        - "COMM_CMPN_NM별 정산 내역"
+        - "HTEL_NO 조회"
+        - "월별 SETL_AMT 추이"
+        - "DEPAZ_AMT 합계 현황"
         
-        **데이터베이스:**
-        - ☁️ Azure: 실시간 운영 데이터
-        - 💻 로컬: 샘플 테스트 데이터
+        **💡 팁:**
+        - 실제 컬럼명을 사용하면 더 정확합니다
+        - 날짜 범위를 명시하면 성능이 향상됩니다
+        - Azure OpenAI가 자동으로 최적화된 쿼리를 생성합니다
         """
         )
 
+        # 새로고침 및 캐시 관리
         st.markdown("---")
+        st.subheader("🔄 시스템 관리")
+
+        col1, col2 = st.columns(2)
+
+        with col1:
+            if st.button("🔄 데이터 새로고침"):
+                st.cache_data.clear()
+                st.rerun()
+
+        with col2:
+            if st.button("🗄️ 연결 테스트"):
+                with st.spinner("연결 테스트 중..."):
+                    if db_manager and db_manager.test_connection():
+                        st.success("✅ 연결 성공!")
+                    else:
+                        st.error("❌ 연결 실패!")
+
+        # 시스템 버전 정보
+        st.markdown("---")
+        st.caption("📱 Version 2.0 - Azure Cloud Edition")
+        st.caption("🏢 Enterprise Grade Security")
+        st.caption("⚡ Powered by GPT-4")
 
 
 # 메인 실행
 if __name__ == "__main__":
     try:
+        debug_environment()
         main()
     except Exception as e:
         st.error(f"애플리케이션 시작 실패: {e}")

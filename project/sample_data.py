@@ -24,7 +24,7 @@ class SampleDataManager:
         self.logger = logging.getLogger(__name__)
 
         # Azure 사용 가능 여부 확인 (연결 문자열이 실제로 있는지 확인)
-        self.use_azure = (
+        self.use_sample_data = (
             not force_local
             and azure_config
             and azure_config.is_production_ready()
@@ -33,7 +33,7 @@ class SampleDataManager:
             and azure_config.sql_connection_string.strip()  # 빈 문자열 체크
         )
 
-        if self.use_azure:
+        if self.use_sample_data:
             self.logger.info("Azure SQL Database 모드로 초기화")
         else:
             self.logger.info("로컬 SQLite 모드로 초기화")
@@ -41,7 +41,7 @@ class SampleDataManager:
     def create_sample_database(self):
         """샘플 데이터베이스 생성"""
         try:
-            if self.use_azure:
+            if self.use_sample_data:
                 return self._create_azure_database()
             else:
                 return self._create_local_database()
@@ -49,9 +49,9 @@ class SampleDataManager:
         except Exception as e:
             self.logger.error(f"샘플 데이터베이스 생성 실패: {e}")
             # Azure 실패시 로컬로 폴백
-            if self.use_azure:
+            if self.use_sample_data:
                 self.logger.warning("Azure 연결 실패, 로컬 SQLite로 전환")
-                self.use_azure = False
+                self.use_sample_data = False
                 return self._create_local_database()
             raise e
 
@@ -81,7 +81,7 @@ class SampleDataManager:
             data_count = self._check_azure_data(conn)
 
             # 충분한 데이터가 있으면 그대로 사용
-            if data_count["total"] > 1000:
+            if data_count["total"] > 50:
                 self.logger.info(
                     f"충분한 샘플 데이터가 존재합니다 ({data_count['total']:,}건)"
                 )
@@ -89,7 +89,7 @@ class SampleDataManager:
 
             # 데이터 추가 생성
             self.logger.info("샘플 데이터 생성 중...")
-            self._generate_azure_data(conn)
+            self._generate_data(conn)
 
             return conn
 
@@ -105,7 +105,7 @@ class SampleDataManager:
         self._create_sqlite_tables(conn)
 
         # 샘플 데이터 생성
-        self._generate_sqlite_data(conn)
+        self._generate_data(conn)
 
         self.logger.info("✅ 로컬 샘플 데이터베이스 생성 완료")
         return conn
@@ -271,7 +271,7 @@ class SampleDataManager:
         conn.commit()
         self.logger.info("SQLite 테이블 생성 완료")
 
-    def _generate_azure_data(self, conn):
+    def _generate_data(self, conn):
         """Azure SQL Database 샘플 데이터 생성"""
         cursor = conn.cursor()
         operators = ["KT", "SKT", "LGU+", "KT MVNO", "SKT MVNO", "LGU+ MVNO"]
@@ -281,220 +281,127 @@ class SampleDataManager:
         start_date = end_date - timedelta(days=120)
 
         # 포트아웃 데이터 생성
-        for i in range(800):
-            random_days = random.randint(0, 120)
+        for i in range(50):
+            random_days = random.randint(0, (end_date - start_date).days)
             transaction_date = start_date + timedelta(days=random_days)
 
-            from_operator = random.choice(operators)
+            # 통신사 선택(전사업자/후사업자)
+            from_operator = random.choice(["KT", "KT MVNO"])
             to_operator = random.choice([op for op in operators if op != from_operator])
-            status = random.choice(["1", "2", "3"])
+            np_trmn_dtl_sttus_val = random.choice(["1", "2", "3"])
+
+            # 번호이동 상태 코드에 따른 cncl_wthd_date 설정
+            np_trmn_dtl_sttus_val = random.choice(["1", "2", "3"])
+            np_trmn_date = transaction_date.strftime("%Y-%m-%d")
+            # TRT_STUS_CD에 따라 NP_TRMN_DATE 설정
+            if np_trmn_dtl_sttus_val == "1":
+                cncl_wthd_date = None  # NULL
+            elif np_trmn_dtl_sttus_val == "2":
+                cncl_wthd_date = np_trmn_date  # NP_TRMN_DATE 동일
+            else:  # WD
+                # CNCL_WTHD_DATE 이후 1~15일 랜덤 날짜
+                random_days = random.randint(1, 15)
+                cncl_wthd_date = (
+                    transaction_date + timedelta(days=random_days)
+                ).strftime("%Y-%m-%d")
+
+            svc_cont_id = f"{i+1:020d}"
+            bill_acc_id = f"{i+1:011d}"
+            tel_no = f"010{random.randint(1000,9999)}{random.randint(1000,9999)}"
+            pay_amount = random.randint(10, 1000000)
 
             cursor.execute(
                 """
                 INSERT INTO PY_NP_TRMN_RMNY_TXN 
-                (NP_DIV_CD, TRMN_NP_ADM_NO, NP_TRMN_DATE, BCHNG_COMM_CMPN_ID, 
-                 ACHNG_COMM_CMPN_ID, SVC_CONT_ID, BILL_ACC_ID, TEL_NO, 
-                 NP_TRMN_DTL_STTUS_VAL, PAY_AMT)
-                VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
-            """,
+                VALUES (?,?,?,?,?,?,?,?,?,?,?)
+                """,
                 (
-                    "OUT",
-                    f"AT{i:07d}",
-                    transaction_date.strftime("%Y-%m-%d"),
-                    from_operator,
-                    to_operator,
-                    f"{i+1:020d}",
-                    f"{i+1:011d}",
-                    f"010{random.randint(1000,9999)}{random.randint(1000,9999)}",
-                    status,
-                    random.randint(1000, 500000),
+                    "OUT",  # NP_DIV_CD
+                    f"{i+1:07d}",  # TRMN_NP_ADM_NO
+                    np_trmn_date,  # NP_TRMN_DATE
+                    cncl_wthd_date,  # CNCL_WTHD_DATE
+                    from_operator,  # BCHNG_COMM_CMPN_ID
+                    to_operator,  # ACHNG_COMM_CMPN_ID
+                    svc_cont_id,  # SVC_CONT_ID
+                    bill_acc_id,  # BILL_ACC_ID
+                    tel_no,  # TEL_NO
+                    np_trmn_dtl_sttus_val,  # NP_TRMN_DTL_STTUS_VAL
+                    pay_amount,  # PAY_AMT
                 ),
             )
-
-        # 포트인 데이터 생성
-        for i in range(1000):
-            random_days = random.randint(0, 120)
-            transaction_date = start_date + timedelta(days=random_days)
-
-            from_operator = random.choice(operators)
-            to_operator = random.choice([op for op in operators if op != from_operator])
-            status = random.choice(["OK", "CN", "WD"])
-
-            cursor.execute(
-                """
-                INSERT INTO PY_NP_SBSC_RMNY_TXN 
-                (NP_DIV_CD, TRT_DATE, BCHNG_COMM_CMPN_ID, ACHNG_COMM_CMPN_ID, 
-                 SVC_CONT_ID, BILL_ACC_ID, TEL_NO, NP_STTUS_CD, SETL_AMT)
-                VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?)
-            """,
-                (
-                    "IN",
-                    transaction_date.strftime("%Y-%m-%d"),
-                    from_operator,
-                    to_operator,
-                    f"{i+1:020d}",
-                    f"{i+1:011d}",
-                    f"010{random.randint(1000,9999)}{random.randint(1000,9999)}",
-                    status,
-                    random.randint(1000, 500000),
-                ),
-            )
-
-        # 예치금 데이터 생성
-        for i in range(600):
-            random_days = random.randint(0, 120)
-            transaction_date = start_date + timedelta(days=random_days)
 
             cursor.execute(
                 """
                 INSERT INTO PY_DEPAZ_BAS 
-                (SVC_CONT_ID, BILL_ACC_ID, DEPAZ_DIV_CD, RMNY_DATE, RMNY_METH_CD, DEPAZ_AMT)
-                VALUES (?, ?, ?, ?, ?, ?)
-            """,
+                VALUES (?,?,?,?,?,?,?)
+                """,
                 (
-                    f"{i+1:020d}",
-                    f"{i+1:011d}",
-                    random.choice(["10", "90"]),
-                    transaction_date.strftime("%Y-%m-%d"),
-                    random.choice(["NA", "CA"]),
-                    random.randint(1000, 500000),
+                    i + 1,  # DEPAZ_SEQ
+                    svc_cont_id,  # SVC_CONT_ID
+                    bill_acc_id,  # BILL_ACC_ID
+                    random.choice(["10", "90"]),  # DEPAZ_DIV_CD
+                    np_trmn_date,  # RMNY_DATE
+                    random.choice(["NA", "CA"]),  # RMNY_METH_CD
+                    pay_amount,  # DEPAZ_AMT
+                ),
+            )
+
+        # 포트인 데이터 생성
+        for i in range(50):
+            random_days = random.randint(0, (end_date - start_date).days)
+            transaction_date = start_date + timedelta(days=random_days)
+
+            to_operator = random.choice(["KT", "KT MVNO"])
+            from_operator = random.choice([op for op in operators if op != to_operator])
+
+            # 번호이동 상태 코드에 따른 cncl_date 설정
+            np_sttus_cd = random.choice(["OK", "CN", "WD"])
+            trt_date = transaction_date.strftime("%Y-%m-%d")
+            # TRT_STUS_CD에 따라 NP_TRMN_DATE 설정
+            if np_sttus_cd == "OK":
+                cncl_date = None  # NULL
+            elif np_sttus_cd == "CN":
+                cncl_date = trt_date  # TRT_DATE 동일
+            else:  # WD
+                # CNCL_WTHD_DATE 이후 1~15일 랜덤 날짜
+                random_days = random.randint(1, 15)
+                cncl_date = (transaction_date + timedelta(days=random_days)).strftime(
+                    "%Y-%m-%d"
+                )
+
+            settlement_amount = random.randint(10, 1000000)
+
+            cursor.execute(
+                """
+                INSERT INTO  PY_NP_SBSC_RMNY_TXN 
+                VALUES (?,?,?,?,?,?,?,?,?,?,?)
+                """,
+                (
+                    "IN",  # NP_DIV_CD,
+                    i + 1,  # NP_SBSC_RMNY_SEQ
+                    trt_date,  # TRT_DATE
+                    cncl_date,  # CNCL_DATE
+                    from_operator,  # BCHNG_COMM_CMPN_ID
+                    to_operator,  # ACHNG_COMM_CMPN_ID
+                    f"{i+1:020d}",  # SVC_CONT_ID
+                    f"{i+1:011d}",  # BILL_ACC_ID
+                    f"010{random.randint(1000,9999)}{random.randint(1000,9999)}",  # TEL_NO
+                    np_sttus_cd,  # NP_STTUS_CD
+                    settlement_amount,  # SETL_AMT
                 ),
             )
 
         conn.commit()
-        self.logger.info("Azure SQL Database 샘플 데이터 생성 완료")
-
-    def _generate_sqlite_data(self, conn):
-        """SQLite 샘플 데이터 생성"""
-        operators = ["KT", "SKT", "LGU+", "KT MVNO", "SKT MVNO", "LGU+ MVNO"]
-
-        # 최근 4개월 기간
-        end_date = datetime.now()
-        start_date = end_date - timedelta(days=120)
-
-        # 포트아웃 데이터
-        port_out_data = []
-        for i in range(800):
-            random_days = random.randint(0, 120)
-            transaction_date = start_date + timedelta(days=random_days)
-
-            from_operator = random.choice(operators)
-            to_operator = random.choice([op for op in operators if op != from_operator])
-            status = random.choice(["1", "2", "3"])
-
-            cncl_date = None
-            if status == "2":
-                cncl_date = transaction_date.strftime("%Y-%m-%d")
-            elif status == "3":
-                cncl_date = (
-                    transaction_date + timedelta(days=random.randint(1, 15))
-                ).strftime("%Y-%m-%d")
-
-            port_out_data.append(
-                (
-                    "OUT",
-                    f"T{i+1:07d}",
-                    transaction_date.strftime("%Y-%m-%d"),
-                    cncl_date,
-                    from_operator,
-                    to_operator,
-                    f"{i+1:020d}",
-                    f"{i+1:011d}",
-                    f"010{random.randint(1000,9999)}{random.randint(1000,9999)}",
-                    status,
-                    random.randint(1000, 500000),
-                )
-            )
-
-        conn.executemany(
-            """
-            INSERT INTO PY_NP_TRMN_RMNY_TXN 
-            VALUES (?,?,?,?,?,?,?,?,?,?,?)
-        """,
-            port_out_data,
-        )
-
-        # 포트인 데이터
-        port_in_data = []
-        for i in range(1000):
-            random_days = random.randint(0, 120)
-            transaction_date = start_date + timedelta(days=random_days)
-
-            from_operator = random.choice(operators)
-            to_operator = random.choice([op for op in operators if op != from_operator])
-            status = random.choice(["OK", "CN", "WD"])
-
-            cncl_date = None
-            if status == "CN":
-                cncl_date = transaction_date.strftime("%Y-%m-%d")
-            elif status == "WD":
-                cncl_date = (
-                    transaction_date + timedelta(days=random.randint(1, 15))
-                ).strftime("%Y-%m-%d")
-
-            port_in_data.append(
-                (
-                    "IN",
-                    i + 1,
-                    transaction_date.strftime("%Y-%m-%d"),
-                    cncl_date,
-                    from_operator,
-                    to_operator,
-                    f"{i+1:020d}",
-                    f"{i+1:011d}",
-                    f"010{random.randint(1000,9999)}{random.randint(1000,9999)}",
-                    status,
-                    random.randint(1000, 500000),
-                )
-            )
-
-        conn.executemany(
-            """
-            INSERT INTO PY_NP_SBSC_RMNY_TXN 
-            VALUES (?,?,?,?,?,?,?,?,?,?,?)
-        """,
-            port_in_data,
-        )
-
-        # 예치금 데이터
-        deposit_data = []
-        for i in range(600):
-            random_days = random.randint(0, 120)
-            transaction_date = start_date + timedelta(days=random_days)
-
-            deposit_data.append(
-                (
-                    i + 1,
-                    f"{i+1:020d}",
-                    f"{i+1:011d}",
-                    random.choice(["10", "90"]),
-                    transaction_date.strftime("%Y-%m-%d"),
-                    random.choice(["NA", "CA"]),
-                    random.randint(1000, 500000),
-                )
-            )
-
-        conn.executemany(
-            """
-            INSERT INTO PY_DEPAZ_BAS 
-            VALUES (?,?,?,?,?,?,?)
-        """,
-            deposit_data,
-        )
-
-        conn.commit()
-        self.logger.info(
-            f"SQLite 샘플 데이터 생성 완료: 포트아웃 {len(port_out_data)}건, 포트인 {len(port_in_data)}건, 예치금 {len(deposit_data)}건"
-        )
+        self.logger.info("Database 샘플 데이터 생성 완료")
 
     def is_using_azure(self) -> bool:
         """Azure 사용 여부 반환"""
-        return self.use_azure
+        return self.use_sample_data
 
     def get_connection_info(self) -> Dict[str, Any]:
         """연결 정보 반환"""
         return {
-            "type": "Azure SQL Database" if self.use_azure else "SQLite",
+            "type": "Azure SQL Database" if self.use_sample_data else "SQLite",
             "azure_ready": (
                 self.azure_config.is_production_ready() if self.azure_config else False
             ),
@@ -550,7 +457,7 @@ class SampleDataManager:
 
     def cleanup_sample_data(self, conn):
         """샘플 데이터 정리 (Azure만 해당)"""
-        if not self.use_azure:
+        if not self.use_sample_data:
             self.logger.info("SQLite는 메모리 기반이므로 정리가 불필요합니다")
             return
 
