@@ -145,30 +145,34 @@ class SQLGenerator:
                         self.logger.info("AI 기반 SQL 쿼리 생성 성공")
                         return ai_sql, True
                     else:
-                        self.logger.warning(
-                            "AI 생성 쿼리 검증 실패, 규칙 기반으로 전환"
-                        )
+                        self.logger.warning("AI 생성 쿼리 검증 실패, 규칙 기반으로 전환")
                 except Exception as ai_error:
                     self.logger.error(f"AI SQL 생성 중 오류: {ai_error}")
 
-            # # 2. 규칙 기반 쿼리 생성 (백업)
-            # try:
-            #     rule_sql = self._generate_rule_based_sql(user_input)
+            # 2. 규칙 기반 쿼리 생성 (백업)
+            try:
+                rule_sql = self._generate_rule_based_sql(user_input)
+                if rule_sql and self._validate_sql(rule_sql):
+                    self.logger.info("규칙 기반 SQL 쿼리 생성 성공")
+                    return rule_sql, False
+                else:
+                    self.logger.warning("규칙 기반 쿼리 검증 실패, 기본 쿼리 사용")
+            except Exception as rule_error:
+                self.logger.error(f"규칙 기반 SQL 생성 중 오류: {rule_error}")
 
-            #     if self._validate_sql(rule_sql):
-            #         self.logger.info("규칙 기반 SQL 쿼리 생성 성공")
-            #         return rule_sql, False
-            #     else:
-            #         self.logger.warning("규칙 기반 쿼리 검증 실패, 기본 쿼리 사용")
-            # except Exception as rule_error:
-            #     self.logger.error(f"규칙 기반 SQL 생성 중 오류: {rule_error}")
-
-            # # 3. 최종 백업: 기본 쿼리
-            # return self._get_default_query(), False
+            # 3. 최종 백업: 기본 쿼리
+            default_query = self._get_default_query()
+            return default_query, False
 
         except Exception as e:
             self.logger.error(f"전체 SQL 생성 실패: {e}")
-            return self._get_default_query(), False
+            # 🔥 수정: 예외 발생 시에도 항상 튜플 반환
+            error_query = """
+            SELECT 
+                'SQL 쿼리 생성 중 오류가 발생했습니다' as 오류메시지,
+                '다시 시도해주세요' as 안내
+            """
+            return error_query, False
 
     def _generate_ai_sql(self, user_input: str) -> Optional[str]:
         """AI를 사용한 SQL 쿼리 생성"""
@@ -233,29 +237,29 @@ class SQLGenerator:
             if "포트인" in user_input_lower:
                 return f"""
                 SELECT 
-                    strftime('%Y-%m', TRT_DATE) as 월,
+                    FORMAT(TRT_DATE, 'yyyy-MM') as 월,
                     BCHNG_COMM_CMPN_ID as 전사업자,
                     COUNT(*) as 총건수,
                     SUM(SETL_AMT) as 총금액,
-                    ROUND(AVG(SETL_AMT), 0) as 평균금액
+                    ROUND(AVG(CAST(SETL_AMT AS FLOAT)), 0) as 평균금액
                 FROM PY_NP_SBSC_RMNY_TXN 
                 WHERE TRT_DATE >= {date_filter}
                     AND NP_STTUS_CD IN ('OK', 'WD')
-                GROUP BY strftime('%Y-%m', TRT_DATE), BCHNG_COMM_CMPN_ID
+                GROUP BY FORMAT(TRT_DATE, 'yyyy-MM'), BCHNG_COMM_CMPN_ID
                 ORDER BY 월 DESC, 총금액 DESC
                 """
             elif "포트아웃" in user_input_lower:
                 return f"""
                 SELECT 
-                    strftime('%Y-%m', NP_TRMN_DATE) as 월,
-                    BCHNG_COMM_CMPN_ID as 전사업자,
+                    FORMAT(NP_TRMN_DATE, 'yyyy-MM') as 월,
+                    ACHNG_COMM_CMPN_ID as 전사업자,
                     COUNT(*) as 총건수,
                     SUM(PAY_AMT) as 총금액,
-                    ROUND(AVG(PAY_AMT), 0) as 평균금액
+                    ROUND(AVG(CAST(PAY_AMT AS FLOAT)), 0) as 평균금액
                 FROM PY_NP_TRMN_RMNY_TXN 
                 WHERE NP_TRMN_DATE >= {date_filter}
                     AND NP_TRMN_DTL_STTUS_VAL IN ('1', '3')
-                GROUP BY strftime('%Y-%m', NP_TRMN_DATE), BCHNG_COMM_CMPN_ID
+                GROUP BY FORMAT(NP_TRMN_DATE, 'yyyy-MM'), ACHNG_COMM_CMPN_ID
                 ORDER BY 월 DESC, 총금액 DESC
                 """
 
@@ -267,9 +271,9 @@ class SQLGenerator:
             SELECT 
                 'PORT_IN' as 번호이동타입,
                 TRT_DATE as 번호이동일,
-                SUBSTR(TEL_NO, 1, 3) || '****' || SUBSTR(TEL_NO, -4) as 전화번호,
+                LEFT(TEL_NO, 3) + '****' + RIGHT(TEL_NO, 4) as 전화번호,
                 SETL_AMT as 정산금액,
-                BCHNG_COMM_CMPN_ID as 전사업자,
+                BCHNG_COMM_CMPN_ID as 사업자,
                 NP_STTUS_CD as 상태
             FROM PY_NP_SBSC_RMNY_TXN 
             WHERE TEL_NO = '{phone}' AND NP_STTUS_CD IN ('OK', 'WD')
@@ -277,9 +281,9 @@ class SQLGenerator:
             SELECT 
                 'PORT_OUT' as 번호이동타입,
                 NP_TRMN_DATE as 번호이동일,
-                SUBSTR(TEL_NO, 1, 3) || '****' || SUBSTR(TEL_NO, -4) as 전화번호,
+                LEFT(TEL_NO, 3) + '****' + RIGHT(TEL_NO, 4) as 전화번호,
                 PAY_AMT as 정산금액,
-                BCHNG_COMM_CMPN_ID as 전사업자,
+                ACHNG_COMM_CMPN_ID as 사업자,
                 NP_TRMN_DTL_STTUS_VAL as 상태
             FROM PY_NP_TRMN_RMNY_TXN 
             WHERE TEL_NO = '{phone}' AND NP_TRMN_DTL_STTUS_VAL IN ('1', '3')
@@ -287,35 +291,33 @@ class SQLGenerator:
             """
 
         # 3. 사업자별 현황
-        if any(
-            keyword in user_input_lower
-            for keyword in ["사업자", "회사", "통신사", "현황"]
-        ):
+        if any(keyword in user_input_lower for keyword in ["사업자", "회사", "통신사", "현황"]):
             return f"""
             SELECT 
                 BCHNG_COMM_CMPN_ID as 사업자,
                 'PORT_IN' as 타입,
                 COUNT(*) as 건수,
                 SUM(SETL_AMT) as 총금액,
-                ROUND(AVG(SETL_AMT), 0) as 평균금액
+                ROUND(AVG(CAST(SETL_AMT AS FLOAT)), 0) as 평균금액
             FROM PY_NP_SBSC_RMNY_TXN
             WHERE TRT_DATE >= {date_filter}
                 AND NP_STTUS_CD IN ('OK', 'WD')
             GROUP BY BCHNG_COMM_CMPN_ID
             UNION ALL
             SELECT 
-                BCHNG_COMM_CMPN_ID as 사업자,
+                ACHNG_COMM_CMPN_ID as 사업자,
                 'PORT_OUT' as 타입,
                 COUNT(*) as 건수,
                 SUM(PAY_AMT) as 총금액,
-                ROUND(AVG(PAY_AMT), 0) as 평균금액
+                ROUND(AVG(CAST(PAY_AMT AS FLOAT)), 0) as 평균금액
             FROM PY_NP_TRMN_RMNY_TXN
             WHERE NP_TRMN_DATE >= {date_filter}
                 AND NP_TRMN_DTL_STTUS_VAL IN ('1', '3')
-            GROUP BY BCHNG_COMM_CMPN_ID
+            GROUP BY ACHNG_COMM_CMPN_ID
+            ORDER BY 사업자, 타입
             """
 
-        # 4. 기본 요약 쿼리
+        # 4. 기본 쿼리 반환
         return self._get_default_query()
 
     def perator_filter(self, user_input: str) -> str:

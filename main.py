@@ -1284,8 +1284,6 @@ def display_charts(port_in_df, port_out_df):
         st.info("📊 표시할 데이터가 없습니다. 샘플 데이터를 생성해주세요.")
 
 
-# main.py의 display_chatbot 함수를 다음과 같이 수정하세요
-
 def display_chatbot(db_manager):
     """AI 챗봇 인터페이스 - 대화형 구조"""
 
@@ -1380,20 +1378,37 @@ def display_chatbot(db_manager):
         st.success("✅ 대화 히스토리가 초기화되었습니다.")
         st.rerun()
 
-    # 🔥 수정: 쿼리 실행 처리 - 안전한 SQL 생성
+    # 🔥 수정: 쿼리 실행 처리 - 안전한 SQL 생성 및 언패킹 오류 해결
     if submit_button and user_input.strip():
         with st.spinner("🤖 AI가 SQL 쿼리를 생성하고 실행 중입니다..."):
             time.sleep(1)
             try:
-                # 🔥 수정: SQL 생성 방식 개선
+                # 🔥 수정: SQL 생성 방식 개선 - 안전한 언패킹
                 sql_query = None
                 is_ai_generated = False
                 
                 # 1. AI 생성기가 있으면 AI로 시도
                 if st.session_state.sql_generator is not None:
                     try:
-                        sql_query, is_ai_generated = st.session_state.sql_generator.generate_sql(user_input)
-                        st.info("🤖 Azure OpenAI로 쿼리를 생성했습니다.")
+                        # 🔥 수정: 안전한 언패킹 처리
+                        ai_result = st.session_state.sql_generator.generate_sql(user_input)
+                        
+                        if ai_result is not None:
+                            # 튜플인지 확인
+                            if isinstance(ai_result, tuple) and len(ai_result) == 2:
+                                sql_query, is_ai_generated = ai_result
+                                st.info("🤖 Azure OpenAI로 쿼리를 생성했습니다.")
+                            else:
+                                # 문자열만 반환된 경우
+                                if isinstance(ai_result, str):
+                                    sql_query = ai_result
+                                    is_ai_generated = True
+                                    st.info("🤖 Azure OpenAI로 쿼리를 생성했습니다.")
+                                else:
+                                    raise ValueError(f"예상치 못한 반환 타입: {type(ai_result)}")
+                        else:
+                            raise ValueError("AI 생성기가 None을 반환했습니다.")
+                            
                     except Exception as ai_error:
                         st.warning(f"⚠️ AI 쿼리 생성 실패: {ai_error}")
                         sql_query = None
@@ -1408,7 +1423,7 @@ def display_chatbot(db_manager):
                     is_ai_generated = False
 
                 # 3. 쿼리 실행
-                if sql_query:
+                if sql_query and sql_query.strip():
                     result_df, metadata = db_manager.execute_query(sql_query)
 
                     # 설명 생성 (AI 생성기가 있을 때만)
@@ -1416,8 +1431,8 @@ def display_chatbot(db_manager):
                     if st.session_state.sql_generator and hasattr(st.session_state.sql_generator, "get_query_explanation"):
                         try:
                             explanation = st.session_state.sql_generator.get_query_explanation(sql_query)
-                        except:
-                            explanation = "쿼리 설명을 생성할 수 없습니다."
+                        except Exception as exp_error:
+                            explanation = f"쿼리 설명 생성 실패: {exp_error}"
 
                     # 대화 히스토리에 저장
                     conversation_item = {
@@ -1502,6 +1517,8 @@ def display_chatbot(db_manager):
                     st.code(f"오류 타입: {type(e).__name__}")
                     st.code(f"오류 메시지: {str(e)}")
                     st.code(f"SQL 생성기 상태: {st.session_state.sql_generator is not None}")
+                    if st.session_state.sql_generator:
+                        st.code(f"SQL 생성기 타입: {type(st.session_state.sql_generator)}")
 
     # 대화 히스토리 표시 (기존 코드 그대로 유지)
     if st.session_state.conversation_history:
