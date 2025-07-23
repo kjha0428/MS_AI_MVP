@@ -26,6 +26,8 @@ from dotenv import load_dotenv
 # 샘플 데이터 임포트
 from sample_data import create_sample_database
 
+from sql_generator import SQLGenerator
+
 # 환경변수 로드
 
 load_dotenv()
@@ -135,19 +137,19 @@ logger = logging.getLogger(__name__)
 
 
 # 🔥 임시 디버깅 코드 추가
-def debug_environment():
-    st.write("🔍 환경변수 디버깅:")
-    env_vars = [
-        "AZURE_SQL_SERVER",
-        "AZURE_SQL_DATABASE",
-        "AZURE_SQL_USERNAME",
-        "AZURE_SQL_PASSWORD",
-    ]
-    for var in env_vars:
-        value = os.getenv(var, "❌ 없음")
-        if "PASSWORD" in var and value != "❌ 없음":
-            value = "✅ 설정됨"
-        st.write(f"- {var}: {value}")
+# def debug_environment():
+#     st.write("🔍 환경변수 디버깅:")
+#     env_vars = [
+#         "AZURE_SQL_SERVER",
+#         "AZURE_SQL_DATABASE",
+#         "AZURE_SQL_USERNAME",
+#         "AZURE_SQL_PASSWORD",
+#     ]
+#     for var in env_vars:
+#         value = os.getenv(var, "❌ 없음")
+#         if "PASSWORD" in var and value != "❌ 없음":
+#             value = "✅ 설정됨"
+#         st.write(f"- {var}: {value}")
 
 
 # 데이터베이스 초기화
@@ -419,7 +421,7 @@ def generate_sql_with_openai(user_input, azure_config, is_azure=False):
         )
 
         # 데이터베이스 스키마 정보
-        schema_info = get_database_schema_info(is_azure)
+        schema_info = get_database_schema_info(azure_config, is_azure)
 
         # 프롬프트 구성
         system_prompt = f"""
@@ -488,51 +490,56 @@ def generate_sql_with_openai(user_input, azure_config, is_azure=False):
         raise e
 
 
-def get_database_schema_info(is_azure=False):
+def get_database_schema_info(azure_config, is_azure=False):
     """데이터베이스 스키마 정보 반환"""
 
-    schema = {
-        "tables": {
-            "PY_NP_SBSC_RMNY_TXN": {
-                "description": "번호이동 가입 정산 거래",
-                "columns": {
-                    "TEL_NO": "전화번호",
-                    "TRT_DATE": "거래일자",
-                    "SETL_AMT": "정산금액",
-                    "BCHNG_COMM_CMPN_ID": "전사업자ID",
-                    "ACHNG_COMM_CMPN_ID": "후사업자ID",
-                    "NP_STTUS_CD": "번호이동상태코드",
-                    "SVC_CONT_ID": "서비스계약ID",
-                },
-            },
-            "PY_NP_TRMN_RMNY_TXN": {
-                "description": "번호이동 해지 정산 거래",
-                "columns": {
-                    "TEL_NO": "전화번호",
-                    "NP_TRMN_DATE": "번호이동해지일자",
-                    "PAY_AMT": "지급금액",
-                    "BCHNG_COMM_CMPN_ID": "전사업자ID",
-                    "ACHNG_COMM_CMPN_ID": "후사업자ID",
-                    "NP_TRMN_DTL_STTUS_VAL": "해지상세상태값",
-                    "SVC_CONT_ID": "서비스계약ID",
-                },
-            },
-            "PY_DEPAZ_BAS": {
-                "description": "예치금 기본",
-                "columns": {
-                    "RMNY_DATE": "수납일자",
-                    "DEPAZ_AMT": "예치금액",
-                    "DEPAZ_DIV_CD": "예치금구분코드",
-                    "RMNY_METH_CD": "수납방법코드",
-                },
-            },
-        },
-        "common_filters": {
-            "port_in_status": "NP_STTUS_CD IN ('OK', 'WD')",
-            "port_out_status": "NP_TRMN_DTL_STTUS_VAL IN ('1', '3')",
-            "deposit_status": "DEPAZ_DIV_CD = '10' AND RMNY_METH_CD = 'NA'",
-        },
-    }
+    # schema = {
+    #     "tables": {
+    #         "PY_NP_SBSC_RMNY_TXN": {
+    #             "description": "번호이동 가입 정산 거래",
+    #             "columns": {
+    #                 "TEL_NO": "전화번호",
+    #                 "TRT_DATE": "거래일자",
+    #                 "SETL_AMT": "정산금액",
+    #                 "BCHNG_COMM_CMPN_ID": "전사업자ID",
+    #                 "ACHNG_COMM_CMPN_ID": "후사업자ID",
+    #                 "NP_STTUS_CD": "번호이동상태코드",
+    #                 "SVC_CONT_ID": "서비스계약ID",
+    #             },
+    #         },
+    #         "PY_NP_TRMN_RMNY_TXN": {
+    #             "description": "번호이동 해지 정산 거래",
+    #             "columns": {
+    #                 "TEL_NO": "전화번호",
+    #                 "NP_TRMN_DATE": "번호이동해지일자",
+    #                 "PAY_AMT": "지급금액",
+    #                 "BCHNG_COMM_CMPN_ID": "전사업자ID",
+    #                 "ACHNG_COMM_CMPN_ID": "후사업자ID",
+    #                 "NP_TRMN_DTL_STTUS_VAL": "해지상세상태값",
+    #                 "SVC_CONT_ID": "서비스계약ID",
+    #             },
+    #         },
+    #         "PY_DEPAZ_BAS": {
+    #             "description": "예치금 기본",
+    #             "columns": {
+    #                 "RMNY_DATE": "수납일자",
+    #                 "DEPAZ_AMT": "예치금액",
+    #                 "DEPAZ_DIV_CD": "예치금구분코드",
+    #                 "RMNY_METH_CD": "수납방법코드",
+    #             },
+    #         },
+    #     },
+    #     "common_filters": {
+    #         "port_in_status": "NP_STTUS_CD IN ('OK', 'WD')",
+    #         "port_out_status": "NP_TRMN_DTL_STTUS_VAL IN ('1', '3')",
+    #         "deposit_status": "DEPAZ_DIV_CD = '10' AND RMNY_METH_CD = 'NA'",
+    #     },
+    # }
+
+    # 수정: sql_generator.py의 SQLGenerator를 사용하여 스키마 정보 가져오기
+    # SQLGenerator 인스턴스 생성
+    sql_generator = SQLGenerator(azure_config)
+    schema = sql_generator._load_schema()
 
     return json.dumps(schema, ensure_ascii=False, indent=2)
 
@@ -656,7 +663,7 @@ def generate_rule_based_sql_query(user_input, is_azure=False):
     # 3. 사업자별 현황
     if any(
         keyword in user_input_lower
-        for keyword in ["사업자", "회사", "통신사", "skt", "kt", "lgu+"]
+        for keyword in ["사업자", "회사", "통신사", "skt", "kt", "lg"]
     ):
         operator_filter = ""
         if "skt" in user_input_lower or "sk" in user_input_lower:
@@ -667,7 +674,7 @@ def generate_rule_based_sql_query(user_input, is_azure=False):
             operator_filter = (
                 "AND (BCHNG_COMM_CMPN_ID = 'KT' OR ACHNG_COMM_CMPN_ID = 'KT')"
             )
-        elif "lgu" in user_input_lower:
+        elif "lg" in user_input_lower:
             operator_filter = (
                 "AND (BCHNG_COMM_CMPN_ID = 'LGU+' OR ACHNG_COMM_CMPN_ID = 'LGU+')"
             )
@@ -1364,7 +1371,7 @@ def display_sidebar(db_manager):
 # 메인 실행
 if __name__ == "__main__":
     try:
-        debug_environment()
+        # debug_environment()
         main()
     except Exception as e:
         st.error(f"애플리케이션 시작 실패: {e}")

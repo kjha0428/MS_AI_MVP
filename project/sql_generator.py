@@ -53,7 +53,7 @@ class SQLGenerator:
                     "PAY_AMT": "지급금액 (NUMBER(18,3))",
                 },
                 "common_filters": [
-                    "NP_TRMN_DATE >= date('now', '-3 months')",
+                    "NP_TRMN_DATE >= DATEADD(month, -3, GETDATE())",
                     "NP_TRMN_DTL_STTUS_VAL IN ('1', '3')",
                 ],
             },
@@ -74,7 +74,7 @@ class SQLGenerator:
                     "SETL_AMT": "정산금액 (DECIMAL(15,2))",
                 },
                 "common_filters": [
-                    "TRT_DATE >= date('now', '-3 months')",
+                    "TRT_DATE >= DATEADD(month, -3, GETDATE())",
                     "NP_STTUS_CD IN ('OK', 'WD')",
                 ],
             },
@@ -91,7 +91,7 @@ class SQLGenerator:
                     "DEPAZ_AMT": "예치금액 (DECIMAL(15,2))",
                 },
                 "common_filters": [
-                    "RMNY_DATE >= date('now', '-3 months')",
+                    "RMNY_DATE >= DATEADD(month, -3, GETDATE())",
                     "RMNY_METH_CD = 'NA'",
                     "DEPAZ_DIV_CD = '10'",
                 ],
@@ -114,15 +114,14 @@ class SQLGenerator:
         3. PY_DEPAZ_BAS는 예치금 데이터 - 일자: RMNY_DATE
         4. 전화번호는 PY_NP_SBSC_RMNY_TXN.TEL_NO 또는 PY_NP_TRMN_RMNY_TXN.TEL_NO에서 조회
         5. 개인정보 보호: 휴대전화번호는 SUBSTR(TEL_NO, 1, 3) || '****' || SUBSTR(TEL_NO, -4) 형태로 마스킹
-        6. 날짜 필터링 시 최근 3개월을 기본으로 설정
-        7. 집계 쿼리 시 적절한 GROUP BY와 ORDER BY 사용
-        8. 금액은 SUM, AVG 등 집계함수 사용 시 ROUND 적용
-        9. SQLite 문법 사용 (strftime, date 함수 등)
+        7. 날짜 필터링 시 최근 3개월을 기본으로 설정
+        8. 집계 쿼리 시 적절한 GROUP BY와 ORDER BY 사용
+        9. 금액은 SUM, AVG 등 집계함수 사용 시 ROUND 적용
 
         ## 쿼리 패턴:
-        - 월별 집계: strftime('%Y-%m', date_column)
-        - 최근 N개월: date('now', '-N months')
-        - 금액 집계: SUM(SETL_AMT) 또는 SUM(DEPAZ_AMT)
+        - 월별 집계: FORMAT(date_column, 'yyyy-MM')
+        - 최근 N개월: DATEADD(month, -N, GETDATE())
+        - 금액 집계: SUM(PAY_AMT) 또는 SUM(SETL_AMT) 또는 SUM(DEPAZ_AMT)
 
         ## 응답 형식:
         유효한 SQL 쿼리만 반환하세요. 설명이나 다른 텍스트는 포함하지 마세요.
