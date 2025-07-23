@@ -2,6 +2,7 @@
 import os
 from typing import Optional
 import logging
+from openai import AzureOpenAI
 
 # import pyodbc
 import pymssql
@@ -81,9 +82,7 @@ class AzureConfig:
                 self.logger.error("🔥 웹앱 환경에서 OpenAI 설정 누락!")
                 return None
 
-            try:
-                from openai import AzureOpenAI
-                
+            try:                
                 # 🔥 수정: 웹앱 환경에서 안정적인 클라이언트 생성
                 self.logger.info(f"웹앱에서 OpenAI 클라이언트 생성 시도...")
                 self.logger.info(f"  - Endpoint: {self.openai_endpoint}")
