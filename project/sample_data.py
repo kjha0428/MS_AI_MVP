@@ -145,71 +145,247 @@ class SampleDataManager:
         counts["total"] = total
         return counts
 
-    def _create_azure_tables(self, conn):
+    def ensure_tables_exist(self):
+        """테이블이 존재하는지 확인하고 없으면 생성"""
+        if self.use_sample_data:
+            return  # SQLite는 이미 처리됨
+
+        try:
+            self.logger.info("Azure SQL Database 테이블 존재 여부 확인 중...")
+
+            # 테이블 존재 확인
+            tables_exist = self._check_azure_tables_exist()
+
+            if not tables_exist:
+                self.logger.info("테이블이 존재하지 않습니다. 테이블 생성 중...")
+                self._create_azure_tables()
+                self._generate_azure_sample_data()
+            else:
+                self.logger.info("Azure SQL Database 테이블이 이미 존재합니다.")
+
+        except Exception as e:
+            self.logger.error(f"테이블 확인/생성 실패: {e}")
+            raise e
+
+    def _check_azure_tables_exist(self) -> bool:
+        """Azure SQL Database 테이블 존재 여부 확인"""
+        try:
+            check_query = """
+            SELECT COUNT(*) as table_count
+            FROM INFORMATION_SCHEMA.TABLES 
+            WHERE TABLE_NAME IN ('PY_NP_TRMN_RMNY_TXN', 'PY_NP_SBSC_RMNY_TXN', 'PY_DEPAZ_BAS')
+            """
+
+            with self.sqlalchemy_engine.connect() as conn:
+                from sqlalchemy import text
+
+                result = conn.execute(text(check_query))
+                row = result.fetchone()
+                table_count = row[0] if row else 0
+
+            self.logger.info(f"발견된 테이블 수: {table_count}/3")
+            return table_count == 3
+
+        except Exception as e:
+            self.logger.error(f"테이블 존재 확인 실패: {e}")
+            return False
+
+    def _create_azure_tables(self):
         """Azure SQL Database 테이블 생성"""
-        cursor = conn.cursor()
+        try:
+            from sqlalchemy import text
 
-        # 포트아웃 테이블
-        cursor.execute(
-            """
-            IF NOT EXISTS (SELECT * FROM INFORMATION_SCHEMA.TABLES WHERE TABLE_NAME = 'PY_NP_TRMN_RMNY_TXN')
-            CREATE TABLE PY_NP_TRMN_RMNY_TXN (
-                NP_DIV_CD NVARCHAR(3),
-                TRMN_NP_ADM_NO NVARCHAR(11) PRIMARY KEY,
-                NP_TRMN_DATE DATE NOT NULL,
-                CNCL_WTHD_DATE DATE,
-                BCHNG_COMM_CMPN_ID NVARCHAR(50),
-                ACHNG_COMM_CMPN_ID NVARCHAR(50),
-                SVC_CONT_ID NVARCHAR(20),
-                BILL_ACC_ID NVARCHAR(11),
-                TEL_NO NVARCHAR(20),
-                NP_TRMN_DTL_STTUS_VAL NVARCHAR(3),
-                PAY_AMT DECIMAL(18,3),
-                CREATED_AT DATETIME2 DEFAULT GETDATE()
-            )
-        """
-        )
+            with self.sqlalchemy_engine.connect() as conn:
+                # 포트아웃 테이블 생성
+                conn.execute(
+                    text(
+                        """
+                    IF NOT EXISTS (SELECT * FROM INFORMATION_SCHEMA.TABLES WHERE TABLE_NAME = 'PY_NP_TRMN_RMNY_TXN')
+                    CREATE TABLE PY_NP_TRMN_RMNY_TXN (
+                        NP_DIV_CD NVARCHAR(3),
+                        TRMN_NP_ADM_NO NVARCHAR(11) PRIMARY KEY,
+                        NP_TRMN_DATE DATE NOT NULL,
+                        CNCL_WTHD_DATE DATE,
+                        BCHNG_COMM_CMPN_ID NVARCHAR(50),
+                        ACHNG_COMM_CMPN_ID NVARCHAR(50),
+                        SVC_CONT_ID NVARCHAR(20),
+                        BILL_ACC_ID NVARCHAR(11),
+                        TEL_NO NVARCHAR(20),
+                        NP_TRMN_DTL_STTUS_VAL NVARCHAR(3),
+                        PAY_AMT DECIMAL(18,3),
+                        CREATED_AT DATETIME2 DEFAULT GETDATE()
+                    )
+                """
+                    )
+                )
 
-        # 포트인 테이블
-        cursor.execute(
-            """
-            IF NOT EXISTS (SELECT * FROM INFORMATION_SCHEMA.TABLES WHERE TABLE_NAME = 'PY_NP_SBSC_RMNY_TXN')
-            CREATE TABLE PY_NP_SBSC_RMNY_TXN (
-                NP_DIV_CD NVARCHAR(3),
-                NP_SBSC_RMNY_SEQ INT IDENTITY(1,1) PRIMARY KEY,
-                TRT_DATE DATE NOT NULL,
-                CNCL_DATE DATE,
-                BCHNG_COMM_CMPN_ID NVARCHAR(50),
-                ACHNG_COMM_CMPN_ID NVARCHAR(50),
-                SVC_CONT_ID NVARCHAR(20),
-                BILL_ACC_ID NVARCHAR(11),
-                TEL_NO NVARCHAR(20),
-                NP_STTUS_CD NVARCHAR(3),
-                SETL_AMT DECIMAL(15,2),
-                CREATED_AT DATETIME2 DEFAULT GETDATE()
-            )
-        """
-        )
+                # 포트인 테이블 생성
+                conn.execute(
+                    text(
+                        """
+                    IF NOT EXISTS (SELECT * FROM INFORMATION_SCHEMA.TABLES WHERE TABLE_NAME = 'PY_NP_SBSC_RMNY_TXN')
+                    CREATE TABLE PY_NP_SBSC_RMNY_TXN (
+                        NP_DIV_CD NVARCHAR(3),
+                        NP_SBSC_RMNY_SEQ INT IDENTITY(1,1) PRIMARY KEY,
+                        TRT_DATE DATE NOT NULL,
+                        CNCL_DATE DATE,
+                        BCHNG_COMM_CMPN_ID NVARCHAR(50),
+                        ACHNG_COMM_CMPN_ID NVARCHAR(50),
+                        SVC_CONT_ID NVARCHAR(20),
+                        BILL_ACC_ID NVARCHAR(11),
+                        TEL_NO NVARCHAR(20),
+                        NP_STTUS_CD NVARCHAR(3),
+                        SETL_AMT DECIMAL(15,2),
+                        CREATED_AT DATETIME2 DEFAULT GETDATE()
+                    )
+                """
+                    )
+                )
 
-        # 예치금 테이블
-        cursor.execute(
-            """
-            IF NOT EXISTS (SELECT * FROM INFORMATION_SCHEMA.TABLES WHERE TABLE_NAME = 'PY_DEPAZ_BAS')
-            CREATE TABLE PY_DEPAZ_BAS (
-                DEPAZ_SEQ INT IDENTITY(1,1) PRIMARY KEY,
-                SVC_CONT_ID NVARCHAR(20),
-                BILL_ACC_ID NVARCHAR(11),
-                DEPAZ_DIV_CD NVARCHAR(3),
-                RMNY_DATE DATE,
-                RMNY_METH_CD NVARCHAR(5),
-                DEPAZ_AMT DECIMAL(15,2),
-                CREATED_AT DATETIME2 DEFAULT GETDATE()
-            )
-        """
-        )
+                # 예치금 테이블 생성
+                conn.execute(
+                    text(
+                        """
+                    IF NOT EXISTS (SELECT * FROM INFORMATION_SCHEMA.TABLES WHERE TABLE_NAME = 'PY_DEPAZ_BAS')
+                    CREATE TABLE PY_DEPAZ_BAS (
+                        DEPAZ_SEQ INT IDENTITY(1,1) PRIMARY KEY,
+                        SVC_CONT_ID NVARCHAR(20),
+                        BILL_ACC_ID NVARCHAR(11),
+                        DEPAZ_DIV_CD NVARCHAR(3),
+                        RMNY_DATE DATE,
+                        RMNY_METH_CD NVARCHAR(5),
+                        DEPAZ_AMT DECIMAL(15,2),
+                        CREATED_AT DATETIME2 DEFAULT GETDATE()
+                    )
+                """
+                    )
+                )
 
-        conn.commit()
-        self.logger.info("Azure SQL Database 테이블 생성 완료")
+                conn.commit()
+                self.logger.info("Azure SQL Database 테이블 생성 완료")
+
+        except Exception as e:
+            self.logger.error(f"Azure 테이블 생성 실패: {e}")
+            raise e
+
+    def _generate_azure_sample_data(self):
+        """Azure SQL Database 샘플 데이터 생성"""
+        try:
+            from sqlalchemy import text
+            from datetime import datetime, timedelta
+            import random
+
+            operators = ["KT", "SKT", "LGU+"]
+
+            with self.sqlalchemy_engine.connect() as conn:
+                # 포트아웃 데이터 생성 (50건)
+                for i in range(50):
+                    random_days = random.randint(0, 90)
+                    transaction_date = (
+                        datetime.now() - timedelta(days=random_days)
+                    ).strftime("%Y-%m-%d")
+
+                    from_operator = random.choice(operators)
+                    to_operator = random.choice(
+                        [op for op in operators if op != from_operator]
+                    )
+                    status = random.choice(["1", "2", "3"])
+                    pay_amount = random.randint(10000, 100000)
+
+                    conn.execute(
+                        text(
+                            """
+                        INSERT INTO PY_NP_TRMN_RMNY_TXN 
+                        (NP_DIV_CD, TRMN_NP_ADM_NO, NP_TRMN_DATE, BCHNG_COMM_CMPN_ID, 
+                        ACHNG_COMM_CMPN_ID, SVC_CONT_ID, BILL_ACC_ID, TEL_NO, 
+                        NP_TRMN_DTL_STTUS_VAL, PAY_AMT)
+                        VALUES (:np_div_cd, :trmn_np_adm_no, :np_trmn_date, :bchng_comm_cmpn_id,
+                                :achng_comm_cmpn_id, :svc_cont_id, :bill_acc_id, :tel_no,
+                                :np_trmn_dtl_sttus_val, :pay_amt)
+                    """
+                        ),
+                        {
+                            "np_div_cd": "OUT",
+                            "trmn_np_adm_no": f"OUT{i+1:07d}",
+                            "np_trmn_date": transaction_date,
+                            "bchng_comm_cmpn_id": from_operator,
+                            "achng_comm_cmpn_id": to_operator,
+                            "svc_cont_id": f"{i+1:020d}",
+                            "bill_acc_id": f"{i+1:011d}",
+                            "tel_no": f"010{random.randint(1000,9999)}{random.randint(1000,9999)}",
+                            "np_trmn_dtl_sttus_val": status,
+                            "pay_amt": pay_amount,
+                        },
+                    )
+
+                # 포트인 데이터 생성 (50건)
+                for i in range(50):
+                    random_days = random.randint(0, 90)
+                    transaction_date = (
+                        datetime.now() - timedelta(days=random_days)
+                    ).strftime("%Y-%m-%d")
+
+                    from_operator = random.choice(operators)
+                    to_operator = random.choice(
+                        [op for op in operators if op != from_operator]
+                    )
+                    status = random.choice(["OK", "CN", "WD"])
+                    setl_amount = random.randint(10000, 100000)
+
+                    conn.execute(
+                        text(
+                            """
+                        INSERT INTO PY_NP_SBSC_RMNY_TXN 
+                        (NP_DIV_CD, TRT_DATE, BCHNG_COMM_CMPN_ID, ACHNG_COMM_CMPN_ID, 
+                        SVC_CONT_ID, BILL_ACC_ID, TEL_NO, NP_STTUS_CD, SETL_AMT)
+                        VALUES (:np_div_cd, :trt_date, :bchng_comm_cmpn_id, :achng_comm_cmpn_id,
+                                :svc_cont_id, :bill_acc_id, :tel_no, :np_sttus_cd, :setl_amt)
+                    """
+                        ),
+                        {
+                            "np_div_cd": "IN",
+                            "trt_date": transaction_date,
+                            "bchng_comm_cmpn_id": from_operator,
+                            "achng_comm_cmpn_id": to_operator,
+                            "svc_cont_id": f"{i+100:020d}",
+                            "bill_acc_id": f"{i+100:011d}",
+                            "tel_no": f"010{random.randint(1000,9999)}{random.randint(1000,9999)}",
+                            "np_sttus_cd": status,
+                            "setl_amt": setl_amount,
+                        },
+                    )
+
+                # 예치금 데이터 생성 (30건)
+                for i in range(30):
+                    random_days = random.randint(0, 90)
+                    deposit_date = (
+                        datetime.now() - timedelta(days=random_days)
+                    ).strftime("%Y-%m-%d")
+
+                    conn.execute(
+                        text(
+                            """
+                        INSERT INTO PY_DEPAZ_BAS 
+                        (SVC_CONT_ID, BILL_ACC_ID, DEPAZ_DIV_CD, RMNY_DATE, RMNY_METH_CD, DEPAZ_AMT)
+                        VALUES (:svc_cont_id, :bill_acc_id, :depaz_div_cd, :rmny_date, :rmny_meth_cd, :depaz_amt)
+                    """
+                        ),
+                        {
+                            "svc_cont_id": f"{i+200:020d}",
+                            "bill_acc_id": f"{i+200:011d}",
+                            "depaz_div_cd": random.choice(["10", "90"]),
+                            "rmny_date": deposit_date,
+                            "rmny_meth_cd": random.choice(["NA", "CA"]),
+                            "depaz_amt": random.randint(5000, 50000),
+                        },
+                    )
+
+                conn.commit()
+                self.logger.info("Azure SQL Database 샘플 데이터 생성 완료")
+
+        except Exception as e:
+            self.logger.error(f"Azure 샘플 데이터 생성 실패: {e}")
+            raise e
 
     def _create_sqlite_tables(self, conn):
         """SQLite 테이블 생성"""

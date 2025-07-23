@@ -161,12 +161,55 @@ class DatabaseManager:
             # 연결 테스트
             if self.test_connection():
                 self.logger.info("✅ Azure SQL Database 연결 성공")
+
+                # 🔥 추가: 테이블 존재 확인 및 생성
+                self.ensure_tables_exist()
+
             else:
                 raise Exception("Azure 연결 테스트 실패")
 
         except Exception as e:
             self.logger.error(f"❌ Azure SQL Database 연결 실패: {e}")
             raise e
+
+    def check_azure_permissions(self):
+        """Azure SQL Database 권한 확인"""
+        try:
+            from sqlalchemy import text
+
+            with self.sqlalchemy_engine.connect() as conn:
+                # 현재 사용자 확인
+                result = conn.execute(text("SELECT CURRENT_USER as current_user"))
+                current_user = result.fetchone()[0]
+                self.logger.info(f"현재 사용자: {current_user}")
+
+                # 데이터베이스 확인
+                result = conn.execute(text("SELECT DB_NAME() as database_name"))
+                database_name = result.fetchone()[0]
+                self.logger.info(f"현재 데이터베이스: {database_name}")
+
+                # 권한 확인
+                result = conn.execute(
+                    text(
+                        """
+                    SELECT 
+                        p.permission_name,
+                        p.state_desc AS permission_state
+                    FROM sys.database_permissions p
+                    LEFT JOIN sys.objects o ON p.major_id = o.object_id
+                    LEFT JOIN sys.database_principals pr ON p.grantee_principal_id = pr.principal_id
+                    WHERE pr.name = CURRENT_USER OR pr.name = 'public'
+                """
+                    )
+                )
+
+                permissions = result.fetchall()
+                self.logger.info(f"사용자 권한: {len(permissions)}개")
+                for perm in permissions[:5]:  # 처음 5개만 로그
+                    self.logger.info(f"  - {perm[0]}: {perm[1]}")
+
+        except Exception as e:
+            self.logger.warning(f"권한 확인 실패: {e}")
 
     def _create_sqlalchemy_engine(self):
         """SQLAlchemy 엔진 생성 - connection_string 직접 사용"""
