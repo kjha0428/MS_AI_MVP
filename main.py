@@ -778,7 +778,7 @@ def generate_sql_query(user_input, is_azure=True, azure_config=None):
 
     # 2. 규칙 기반 쿼리 생성 (폴백)
     logger.info("규칙 기반 SQL 쿼리 생성 사용")
-    return generate_rule_based_sql_query(user_input, is_azure)
+    # return generate_rule_based_sql_query(user_input, is_azure)
 
 
 # SQL 쿼리 생성 함수 (수정된 버전)
