@@ -1394,6 +1394,7 @@ def display_chatbot(db_manager):
                         ai_result = st.session_state.sql_generator.generate_sql(user_input)
                         
                         if ai_result is not None:
+                            is_ai_generated = True
                             # 튜플인지 확인
                             if isinstance(ai_result, tuple) and len(ai_result) == 2:
                                 sql_query, is_ai_generated = ai_result
@@ -1402,7 +1403,6 @@ def display_chatbot(db_manager):
                                 # 문자열만 반환된 경우
                                 if isinstance(ai_result, str):
                                     sql_query = ai_result
-                                    is_ai_generated = True
                                     st.info("🤖 Azure OpenAI로 쿼리를 생성했습니다.")
                                 else:
                                     raise ValueError(f"예상치 못한 반환 타입: {type(ai_result)}")
