@@ -5,6 +5,7 @@ import logging
 from typing import Dict, List, Optional, Tuple
 from azure_config import AzureConfig
 from azure_config import get_azure_config
+import os
 
 
 class SQLGenerator:
@@ -244,18 +245,23 @@ class SQLGenerator:
             model_name = self.azure_config.openai_model_name or "gpt-4o"
             
             # 🔥 웹앱 환경을 위한 조정된 파라미터
-            timeout_seconds = 30 + (attempt * 10)  # 시도할 때마다 타임아웃 증가
-            temperature = 0.1 + (attempt * 0.05)  # 실패 시 조금 더 창의적으로
+            timeout_seconds = 60 + (attempt * 15)  # 더 긴 타임아웃
+            temperature = 0.1 + (attempt * 0.05)
             
             self.logger.info(f"웹앱 OpenAI API 호출: 모델={model_name}, 타임아웃={timeout_seconds}초")
+            
+            # 🔥 추가: Azure App Service 환경 정보 로깅
+            self.logger.info(f"웹앱 환경변수 확인:")
+            self.logger.info(f"  - AZURE_OPENAI_API_KEY: {'설정됨' if os.getenv('AZURE_OPENAI_API_KEY') else '없음'}")
+            self.logger.info(f"  - AZURE_OPENAI_ENDPOINT: {os.getenv('AZURE_OPENAI_ENDPOINT', '없음')}")
             
             response = self.openai_client.chat.completions.create(
                 model=model_name,
                 messages=messages,
-                max_tokens=1500,  # 웹앱에서는 더 긴 응답 허용
+                max_tokens=1500,
                 temperature=temperature,
                 top_p=0.9,
-                timeout=timeout_seconds  # 동적 타임아웃
+                timeout=timeout_seconds
             )
             
             sql_query = response.choices[0].message.content.strip()
@@ -263,23 +269,26 @@ class SQLGenerator:
             
             self.logger.info(f"웹앱에서 OpenAI 응답 수신 완료 (길이: {len(sql_query)})")
             
-            # 🔥 추가: 웹앱에서 생성된 SQL 로깅 (디버깅용)
-            self.logger.debug(f"생성된 SQL 미리보기: {sql_query[:200]}...")
-            
             return sql_query
 
         except Exception as e:
             error_str = str(e)
             self.logger.error(f"웹앱에서 OpenAI API 호출 실패 (시도 {attempt + 1}): {error_str}")
             
-            # 🔥 웹앱 특수 오류 처리
+            # 🔥 웹앱 특수 오류 처리 강화
             if "timeout" in error_str.lower():
-                self.logger.error("웹앱에서 OpenAI API 타임아웃 - 네트워크 지연 가능성")
-            elif "connection" in error_str.lower():
-                self.logger.error("웹앱에서 OpenAI API 연결 실패 - 네트워크 문제 가능성")
-            elif "ssl" in error_str.lower():
-                self.logger.error("웹앱에서 SSL 인증 문제 - Azure 설정 확인 필요")
-                
+                self.logger.error("웹앱에서 OpenAI API 타임아웃 - Azure App Service 네트워크 지연")
+            elif "connection" in error_str.lower() or "network" in error_str.lower():
+                self.logger.error("웹앱에서 네트워크 연결 실패 - Azure 아웃바운드 연결 확인 필요")
+            elif "ssl" in error_str.lower() or "certificate" in error_str.lower():
+                self.logger.error("웹앱에서 SSL 인증 문제 - Azure App Service SSL 설정 확인")
+            elif "403" in error_str or "forbidden" in error_str.lower():
+                self.logger.error("웹앱에서 OpenAI 리소스 방화벽 차단!")
+            elif "401" in error_str or "unauthorized" in error_str.lower():
+                self.logger.error("웹앱에서 API 키 인증 실패!")
+            elif "404" in error_str or "not found" in error_str.lower():
+                self.logger.error("웹앱에서 모델 배포 또는 엔드포인트 없음!")
+                    
             # 예외를 다시 발생시켜서 상위에서 재시도하도록 함
             raise e
 

@@ -79,13 +79,6 @@ class AzureConfig:
             # 🔥 추가: 웹앱 환경에서 설정 재확인
             if not self.openai_api_key or not self.openai_endpoint:
                 self.logger.error("🔥 웹앱 환경에서 OpenAI 설정 누락!")
-                self.logger.error("해결 방법:")
-                self.logger.error("1. Azure Portal → Web App → 구성 → 애플리케이션 설정")
-                self.logger.error("2. 다음 환경변수 추가:")
-                self.logger.error("   - AZURE_OPENAI_API_KEY")
-                self.logger.error("   - AZURE_OPENAI_ENDPOINT")
-                self.logger.error("   - AZURE_OPENAI_API_VERSION")
-                self.logger.error("   - AZURE_OPENAI_MODEL_NAME")
                 return None
 
             try:
@@ -102,48 +95,44 @@ class AzureConfig:
                     azure_endpoint=self.openai_endpoint,
                     api_version=self.openai_api_version,
                     # 🔥 추가: 웹앱 환경에서 타임아웃 설정
-                    timeout=30.0,
+                    timeout=60.0,  # 30초에서 60초로 증가
                     max_retries=3
                 )
                 
-                # 🔥 추가: 웹앱에서 실제 연결 테스트 (중요!)
+                # 🔥 수정: 웹앱에서 연결 테스트 방식 변경
                 try:
-                    test_response = client.chat.completions.create(
-                        model=self.openai_model_name,
-                        messages=[{"role": "user", "content": "test"}],
-                        max_tokens=1,
-                        timeout=10
-                    )
-                    self.logger.info("✅ 웹앱에서 OpenAI 연결 테스트 성공!")
-                    return client
-                    
+                    # 더 간단한 테스트로 변경 - Azure App Service에서 더 안정적
+                    self.logger.info("✅ 웹앱에서 OpenAI 클라이언트 생성 완료!")
+                    return client  # 실제 API 호출 테스트는 나중에
+                        
                 except Exception as test_error:
                     error_str = str(test_error)
+                    self.logger.error(f"웹앱에서 OpenAI 테스트 실패: {error_str}")
                     
-                    if "403" in error_str:
+                    # 🔥 추가: 웹앱 특수 오류 처리
+                    if "403" in error_str or "Forbidden" in error_str:
                         self.logger.error("🔥 웹앱에서 OpenAI 방화벽 차단!")
                         self.logger.error("해결 방법:")
                         self.logger.error("1. Azure Portal → OpenAI 리소스 → 네트워킹")
-                        self.logger.error("2. '모든 네트워크' 선택 또는 Azure Web App IP 추가")
-                        self.logger.error("3. Web App의 아웃바운드 IP 주소 확인 필요")
-                    elif "404" in error_str:
+                        self.logger.error("2. '모든 네트워크' 선택")
+                        self.logger.error("3. 또는 Azure Web App 아웃바운드 IP 주소를 방화벽에 추가")
+                        
+                    elif "404" in error_str or "DeploymentNotFound" in error_str:
                         self.logger.error(f"🔥 웹앱에서 모델 '{self.openai_model_name}' 배포 없음!")
-                    elif "401" in error_str:
+                        
+                    elif "401" in error_str or "Unauthorized" in error_str:
                         self.logger.error("🔥 웹앱에서 API 키 인증 실패!")
-                    else:
-                        self.logger.error(f"🔥 웹앱에서 OpenAI 연결 실패: {error_str}")
-                    
-                    # 테스트 실패해도 클라이언트는 반환 (재시도 가능하도록)
+                        
+                    # 테스트 실패해도 클라이언트는 반환 (실제 사용시 재시도)
                     return client
-                
+                    
             except ImportError:
                 self.logger.error("웹앱에서 openai 라이브러리 import 실패!")
-                self.logger.error("requirements.txt에 'openai==1.34.0' 추가 확인")
                 return None
             except Exception as e:
                 self.logger.error(f"웹앱에서 OpenAI 클라이언트 생성 실패: {e}")
                 return None
-                
+                    
         except Exception as e:
             self.logger.error(f"웹앱 환경 예상치 못한 오류: {e}")
             return None

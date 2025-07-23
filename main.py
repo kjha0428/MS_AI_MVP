@@ -1296,6 +1296,13 @@ def display_chatbot(db_manager):
             
             azure_config = get_azure_config()
             
+            # 🔥 추가: 웹앱 환경변수 디버깅
+            import os
+            st.write("웹앱 환경변수 확인:")
+            st.write(f"- AZURE_OPENAI_API_KEY: {'설정됨' if os.getenv('AZURE_OPENAI_API_KEY') else '❌ 없음'}")
+            st.write(f"- AZURE_OPENAI_ENDPOINT: {os.getenv('AZURE_OPENAI_ENDPOINT', '❌ 없음')}")
+            st.write(f"- AZURE_OPENAI_MODEL_NAME: {os.getenv('AZURE_OPENAI_MODEL_NAME', '❌ 없음')}")
+            
             # 웹앱 환경에서 설정 검증
             if not azure_config.openai_api_key:
                 st.error("""
