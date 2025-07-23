@@ -11,27 +11,52 @@ class SQLGenerator:
     """자연어를 SQL로 변환하는 AI 기반 쿼리 생성기"""
 
     def __init__(self, azure_config: AzureConfig):
-        """SQL 생성기 초기화"""
+        """SQL 생성기 초기화 - 웹앱 환경 최적화"""
         self.azure_config = azure_config
-        self.openai_client = azure_config.get_openai_client()
         self.logger = logging.getLogger(__name__)
+        
+        # 🔥 추가: 웹앱 환경에서 OpenAI 클라이언트 생성 강제 재시도
+        self.openai_client = None
+        max_retries = 3
+        
+        for attempt in range(max_retries):
+            try:
+                self.logger.info(f"웹앱에서 OpenAI 클라이언트 생성 시도 {attempt + 1}/{max_retries}")
+                self.openai_client = azure_config.get_openai_client()
+                
+                if self.openai_client:
+                    self.logger.info("✅ 웹앱에서 OpenAI 클라이언트 생성 성공!")
+                    break
+                else:
+                    self.logger.warning(f"시도 {attempt + 1}: OpenAI 클라이언트가 None으로 반환됨")
+                    
+            except Exception as e:
+                self.logger.error(f"시도 {attempt + 1}: OpenAI 클라이언트 생성 실패 - {e}")
+                
+            # 재시도 전 잠시 대기
+            if attempt < max_retries - 1:
+                import time
+                time.sleep(2)
+        
+        # 🔥 추가: OpenAI 클라이언트 상태 로깅
+        if self.openai_client:
+            self.logger.info("🤖 AI 기반 SQL 생성 모드 활성화")
+        else:
+            self.logger.error("❌ OpenAI 클라이언트 생성 실패 - 웹앱 환경변수 확인 필요")
+            self.logger.error("웹앱에서 AI 기반 쿼리 생성이 불가능합니다!")
+        
+        # 🔥 추가: 데이터베이스 타입 감지
+        self.is_azure_sql = self._detect_database_type()
+        self.logger.info(f"감지된 DB 타입: {'Azure SQL' if self.is_azure_sql else 'SQLite'}")
 
         # 데이터베이스 스키마 정보
         self.db_schema = self._load_schema()
 
-        # 통신사 매핑 (sample_data.py의 operators와 일치)
+        # 통신사 매핑
         self.operator_mapping = {
-            "KT": "KT",
-            "SKT": "SKT",
-            "SK텔레콤": "SKT",
-            "SK": "SKT",
-            "LGU+": "LGU+",
-            "LG유플러스": "LGU+",
-            "LG": "LGU+",
-            "유플러스": "LGU+",
-            "KT MVNO": "KT MVNO",
-            "SKT MVNO": "SKT MVNO",
-            "LGU+ MVNO": "LGU+ MVNO",
+            "KT": "KT", "SKT": "SKT", "SK텔레콤": "SKT", "SK": "SKT",
+            "LGU+": "LGU+", "LG유플러스": "LGU+", "LG": "LGU+", "유플러스": "LGU+",
+            "KT MVNO": "KT MVNO", "SKT MVNO": "SKT MVNO", "LGU+ MVNO": "LGU+ MVNO",
         }
 
     def _load_schema(self) -> Dict:
@@ -131,44 +156,132 @@ class SQLGenerator:
 
     def generate_sql(self, user_input: str) -> Tuple[str, bool]:
         """
-        자연어 입력을 SQL 쿼리로 변환
-
+        자연어 입력을 SQL 쿼리로 변환 - 웹앱에서 OpenAI 강제 사용
+        
         Returns:
             Tuple[str, bool]: (SQL 쿼리, AI 사용 여부)
         """
+        
+        # 🔥 웹앱 환경에서 OpenAI 클라이언트 필수 체크
+        if not self.openai_client:
+            error_msg = """
+            🔥 웹앱 환경에서 Azure OpenAI 클라이언트가 없습니다!
+            
+            웹앱 해결 방법:
+            1. Azure Portal → Web Apps → [앱 이름] → 구성 → 애플리케이션 설정
+            2. 다음 환경변수 추가/확인:
+            - AZURE_OPENAI_API_KEY = [실제 API 키]
+            - AZURE_OPENAI_ENDPOINT = https://[리소스명].openai.azure.com
+            - AZURE_OPENAI_API_VERSION = 2024-02-01
+            - AZURE_OPENAI_MODEL_NAME = gpt-4o
+            3. 웹앱 재시작
+            4. Azure OpenAI 리소스 → 네트워킹 → '모든 네트워크' 설정
+            """
+            self.logger.error(error_msg)
+            raise Exception("웹앱에서 Azure OpenAI 연결 필수! 애플리케이션 설정을 확인하세요.")
+        
+        # 🔥 웹앱에서 OpenAI 전용 쿼리 생성 (최대 5회 재시도)
+        max_retries = 5  # 웹앱에서는 더 많은 재시도
+        for attempt in range(max_retries):
+            try:
+                self.logger.info(f"웹앱에서 OpenAI SQL 생성 시도 {attempt + 1}/{max_retries}")
+                
+                ai_sql = self._generate_ai_sql_webapp(user_input, attempt)
+                
+                if ai_sql and self._validate_sql(ai_sql):
+                    self.logger.info(f"✅ 웹앱에서 OpenAI SQL 쿼리 생성 성공! (시도 {attempt + 1})")
+                    return ai_sql, True
+                else:
+                    self.logger.warning(f"시도 {attempt + 1}: 웹앱에서 OpenAI 쿼리 검증 실패")
+                    
+            except Exception as e:
+                error_str = str(e)
+                self.logger.error(f"웹앱 시도 {attempt + 1} 실패: {error_str}")
+                
+                # 403 방화벽 오류 - 웹앱 특수 처리
+                if "403" in error_str:
+                    self.logger.error("🔥 웹앱에서 OpenAI 접근 차단!")
+                    self.logger.error("웹앱 해결 방법:")
+                    self.logger.error("1. Azure Portal → OpenAI 리소스 → 네트워킹")
+                    self.logger.error("2. '모든 네트워크' 선택 (웹앱 권장)")
+                    self.logger.error("3. 또는 웹앱 아웃바운드 IP 주소를 방화벽에 추가")
+                    self.logger.error("4. 웹앱 아웃바운드 IP: Azure Portal → Web App → 속성에서 확인")
+                    
+                # 401 인증 오류
+                elif "401" in error_str:
+                    self.logger.error("🔥 웹앱에서 API 키 인증 실패!")
+                    self.logger.error("웹앱 구성 → 애플리케이션 설정에서 AZURE_OPENAI_API_KEY 확인")
+                    
+                # 404 배포 오류
+                elif "404" in error_str:
+                    model_name = self.azure_config.openai_model_name or "gpt-4o"
+                    self.logger.error(f"🔥 웹앱에서 모델 '{model_name}' 배포 없음!")
+                    
+                # 마지막 시도에서 실패하면 예외 발생
+                if attempt == max_retries - 1:
+                    raise Exception(f"웹앱에서 OpenAI 호출 {max_retries}회 모두 실패: {error_str}")
+                    
+            # 재시도 전 점진적 대기 (웹앱에서는 더 긴 대기)
+            import time
+            wait_time = min(5 * (attempt + 1), 30)  # 최대 30초
+            self.logger.info(f"웹앱에서 {wait_time}초 대기 후 재시도...")
+            time.sleep(wait_time)
+        
+        # 모든 시도 실패 시 명확한 오류 메시지
+        raise Exception("웹앱에서 OpenAI를 통한 SQL 생성 필수! 네트워크 및 인증 설정을 확인하세요.")
+
+    def _generate_ai_sql_webapp(self, user_input: str, attempt: int = 0) -> Optional[str]:
+        """웹앱 환경을 위한 AI SQL 쿼리 생성 - 강화된 재시도 로직"""
         try:
-            # 1. AI 기반 쿼리 생성 시도
-            if self.openai_client:
-                try:
-                    ai_sql = self._generate_ai_sql(user_input)
-                    if ai_sql and self._validate_sql(ai_sql):
-                        self.logger.info("AI 기반 SQL 쿼리 생성 성공")
-                        return ai_sql, True
-                    else:
-                        self.logger.warning(
-                            "AI 생성 쿼리 검증 실패, 규칙 기반으로 전환"
-                        )
-                except Exception as ai_error:
-                    self.logger.error(f"AI SQL 생성 중 오류: {ai_error}")
+            messages = [
+                {"role": "system", "content": self._create_system_prompt()},
+                {
+                    "role": "user",
+                    "content": f"다음 요청을 SQL 쿼리로 변환해주세요: {user_input}",
+                },
+            ]
 
-            # # 2. 규칙 기반 쿼리 생성 (백업)
-            # try:
-            #     rule_sql = self._generate_rule_based_sql(user_input)
-
-            #     if self._validate_sql(rule_sql):
-            #         self.logger.info("규칙 기반 SQL 쿼리 생성 성공")
-            #         return rule_sql, False
-            #     else:
-            #         self.logger.warning("규칙 기반 쿼리 검증 실패, 기본 쿼리 사용")
-            # except Exception as rule_error:
-            #     self.logger.error(f"규칙 기반 SQL 생성 중 오류: {rule_error}")
-
-            # # 3. 최종 백업: 기본 쿼리
-            # return self._get_default_query(), False
+            model_name = self.azure_config.openai_model_name or "gpt-4o"
+            
+            # 🔥 웹앱 환경을 위한 조정된 파라미터
+            timeout_seconds = 30 + (attempt * 10)  # 시도할 때마다 타임아웃 증가
+            temperature = 0.1 + (attempt * 0.05)  # 실패 시 조금 더 창의적으로
+            
+            self.logger.info(f"웹앱 OpenAI API 호출: 모델={model_name}, 타임아웃={timeout_seconds}초")
+            
+            response = self.openai_client.chat.completions.create(
+                model=model_name,
+                messages=messages,
+                max_tokens=1500,  # 웹앱에서는 더 긴 응답 허용
+                temperature=temperature,
+                top_p=0.9,
+                timeout=timeout_seconds  # 동적 타임아웃
+            )
+            
+            sql_query = response.choices[0].message.content.strip()
+            sql_query = self._extract_sql_from_response(sql_query)
+            
+            self.logger.info(f"웹앱에서 OpenAI 응답 수신 완료 (길이: {len(sql_query)})")
+            
+            # 🔥 추가: 웹앱에서 생성된 SQL 로깅 (디버깅용)
+            self.logger.debug(f"생성된 SQL 미리보기: {sql_query[:200]}...")
+            
+            return sql_query
 
         except Exception as e:
-            self.logger.error(f"전체 SQL 생성 실패: {e}")
-            return self._get_default_query(), False
+            error_str = str(e)
+            self.logger.error(f"웹앱에서 OpenAI API 호출 실패 (시도 {attempt + 1}): {error_str}")
+            
+            # 🔥 웹앱 특수 오류 처리
+            if "timeout" in error_str.lower():
+                self.logger.error("웹앱에서 OpenAI API 타임아웃 - 네트워크 지연 가능성")
+            elif "connection" in error_str.lower():
+                self.logger.error("웹앱에서 OpenAI API 연결 실패 - 네트워크 문제 가능성")
+            elif "ssl" in error_str.lower():
+                self.logger.error("웹앱에서 SSL 인증 문제 - Azure 설정 확인 필요")
+                
+            # 예외를 다시 발생시켜서 상위에서 재시도하도록 함
+            raise e
 
     def _generate_ai_sql(self, user_input: str) -> Optional[str]:
         """AI를 사용한 SQL 쿼리 생성"""

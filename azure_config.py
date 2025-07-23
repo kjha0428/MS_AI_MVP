@@ -8,13 +8,12 @@ import pymssql
 from urllib.parse import quote_plus
 from dotenv import load_dotenv
 
-
 class AzureConfig:
     """환경변수 기반 Azure 설정 클래스"""
 
     def __init__(self):
-        """Azure 설정 초기화"""
-        # Azure OpenAI 설정 (환경변수에서 직접 로드)
+        """Azure 설정 초기화 - 웹앱 환경 최적화"""
+        # 🔥 추가: 웹앱 환경에서 .env 파일 강제 로드
         try:
             load_dotenv(override=True)  # 기존 환경변수 덮어쓰기
             self.logger = logging.getLogger(__name__)
@@ -23,19 +22,43 @@ class AzureConfig:
             self.logger = logging.getLogger(__name__)
             self.logger.warning(f".env 파일 로드 실패: {e}")
 
+        # Azure OpenAI 설정 (환경변수에서 직접 로드)
         self.openai_api_key = os.getenv("AZURE_OPENAI_API_KEY")
         self.openai_endpoint = os.getenv("AZURE_OPENAI_ENDPOINT")
-        self.openai_api_version = os.getenv("AZURE_OPENAI_API_VERSION")
-        self.openai_model_name = os.getenv("AZURE_OPENAI_MODEL_NAME")
+        self.openai_api_version = os.getenv("AZURE_OPENAI_API_VERSION", "2024-02-01")  # 기본값 설정
+        self.openai_model_name = os.getenv("AZURE_OPENAI_MODEL_NAME", "gpt-4o")  # 기본값 설정
 
-        # Azure SQL Database 설정 (환경변수에서 직접 로드)
+        # 🔥 추가: 엔드포인트 정규화
+        if self.openai_endpoint:
+            self.openai_endpoint = self.openai_endpoint.rstrip('/')
+            if not self.openai_endpoint.startswith('https://'):
+                self.logger.error(f"엔드포인트가 올바르지 않습니다: {self.openai_endpoint}")
+
+        # Azure SQL Database 설정
         self.sql_connection_string = os.getenv("AZURE_SQL_CONNECTION_STRING")
 
-        # 로거 설정
-        self.logger = logging.getLogger(__name__)
+        # 🔥 추가: 웹앱 환경에서 설정 검증
+        self._validate_web_app_settings()
 
         # 설정 상태 로깅
         self._log_configuration_status()
+
+    def _validate_web_app_settings(self):
+        """웹앱 환경에서 설정 검증"""
+        missing_vars = []
+        
+        if not self.openai_api_key:
+            missing_vars.append("AZURE_OPENAI_API_KEY")
+        if not self.openai_endpoint:
+            missing_vars.append("AZURE_OPENAI_ENDPOINT")
+        
+        if missing_vars:
+            self.logger.error("🔥 웹앱 환경에서 누락된 환경변수:")
+            for var in missing_vars:
+                self.logger.error(f"  - {var}")
+            self.logger.error("Azure Web App → 구성 → 애플리케이션 설정에서 환경변수 추가 필요")
+        else:
+            self.logger.info("✅ 웹앱 환경 설정 검증 완료")
 
     def _log_configuration_status(self):
         """설정 상태 로깅"""
@@ -51,57 +74,78 @@ class AzureConfig:
         )
 
     def get_openai_client(self):
-        """Azure OpenAI 클라이언트 생성"""
+        """Azure OpenAI 클라이언트 생성 - 웹앱 환경 최적화"""
         try:
+            # 🔥 추가: 웹앱 환경에서 설정 재확인
             if not self.openai_api_key or not self.openai_endpoint:
-                self.logger.warning("Azure OpenAI 설정이 완전하지 않습니다")
+                self.logger.error("🔥 웹앱 환경에서 OpenAI 설정 누락!")
+                self.logger.error("해결 방법:")
+                self.logger.error("1. Azure Portal → Web App → 구성 → 애플리케이션 설정")
+                self.logger.error("2. 다음 환경변수 추가:")
+                self.logger.error("   - AZURE_OPENAI_API_KEY")
+                self.logger.error("   - AZURE_OPENAI_ENDPOINT")
+                self.logger.error("   - AZURE_OPENAI_API_VERSION")
+                self.logger.error("   - AZURE_OPENAI_MODEL_NAME")
                 return None
 
-            # openai 라이브러리 임포트 시도
             try:
-                import openai
-            except ImportError:
-                self.logger.error(
-                    "openai 라이브러리가 설치되지 않았습니다: pip install openai"
-                )
-                return None
-
-            # Azure OpenAI 클라이언트 생성 (버전 호환성 고려)
-            try:
-                # 최신 버전 방식으로 시도
-                client = openai.AzureOpenAI(
+                from openai import AzureOpenAI
+                
+                # 🔥 수정: 웹앱 환경에서 안정적인 클라이언트 생성
+                self.logger.info(f"웹앱에서 OpenAI 클라이언트 생성 시도...")
+                self.logger.info(f"  - Endpoint: {self.openai_endpoint}")
+                self.logger.info(f"  - API Version: {self.openai_api_version}")
+                self.logger.info(f"  - Model: {self.openai_model_name}")
+                
+                client = AzureOpenAI(
                     api_key=self.openai_api_key,
-                    api_version=self.openai_api_version,
                     azure_endpoint=self.openai_endpoint,
+                    api_version=self.openai_api_version,
+                    # 🔥 추가: 웹앱 환경에서 타임아웃 설정
+                    timeout=30.0,
+                    max_retries=3
                 )
-
-                # 간단한 연결 테스트 (실제 API 호출 없이)
-                if hasattr(client, "chat"):
-                    self.logger.info("Azure OpenAI 클라이언트 생성 성공")
+                
+                # 🔥 추가: 웹앱에서 실제 연결 테스트 (중요!)
+                try:
+                    test_response = client.chat.completions.create(
+                        model=self.openai_model_name,
+                        messages=[{"role": "user", "content": "test"}],
+                        max_tokens=1,
+                        timeout=10
+                    )
+                    self.logger.info("✅ 웹앱에서 OpenAI 연결 테스트 성공!")
                     return client
-                else:
-                    raise Exception("클라이언트 객체가 올바르지 않습니다")
-
-            except TypeError as te:
-                # # 구버전 방식으로 재시도
-                # self.logger.warning(f"최신 방식 실패, 구버전 방식으로 재시도: {te}")
-                # try:
-                #     # 구버전 openai 라이브러리 방식
-                #     openai.api_type = "azure"
-                #     openai.api_key = self.openai_api_key
-                #     openai.api_base = self.openai_endpoint
-                #     openai.api_version = self.openai_api_version
-
-                #     self.logger.info("Azure OpenAI 클라이언트 설정 완료 (구버전 방식)")
-                #     return openai  # 구버전에서는 openai 모듈 자체를 반환
-
-                # except Exception as legacy_error:
-                #     self.logger.error(f"구버전 방식도 실패: {legacy_error}")
-                #     return None
-                self.logger.error(te)
-
+                    
+                except Exception as test_error:
+                    error_str = str(test_error)
+                    
+                    if "403" in error_str:
+                        self.logger.error("🔥 웹앱에서 OpenAI 방화벽 차단!")
+                        self.logger.error("해결 방법:")
+                        self.logger.error("1. Azure Portal → OpenAI 리소스 → 네트워킹")
+                        self.logger.error("2. '모든 네트워크' 선택 또는 Azure Web App IP 추가")
+                        self.logger.error("3. Web App의 아웃바운드 IP 주소 확인 필요")
+                    elif "404" in error_str:
+                        self.logger.error(f"🔥 웹앱에서 모델 '{self.openai_model_name}' 배포 없음!")
+                    elif "401" in error_str:
+                        self.logger.error("🔥 웹앱에서 API 키 인증 실패!")
+                    else:
+                        self.logger.error(f"🔥 웹앱에서 OpenAI 연결 실패: {error_str}")
+                    
+                    # 테스트 실패해도 클라이언트는 반환 (재시도 가능하도록)
+                    return client
+                
+            except ImportError:
+                self.logger.error("웹앱에서 openai 라이브러리 import 실패!")
+                self.logger.error("requirements.txt에 'openai==1.34.0' 추가 확인")
+                return None
+            except Exception as e:
+                self.logger.error(f"웹앱에서 OpenAI 클라이언트 생성 실패: {e}")
+                return None
+                
         except Exception as e:
-            self.logger.error(f"Azure OpenAI 클라이언트 생성 실패: {e}")
+            self.logger.error(f"웹앱 환경 예상치 못한 오류: {e}")
             return None
 
     def get_available_models(self) -> list:
