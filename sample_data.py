@@ -6,10 +6,9 @@ from datetime import datetime, timedelta
 import random
 import logging
 from typing import Optional, Dict, Any
-from sqlalchemy import text
+from sqlalchemy import text, create_engine
 from datetime import datetime, timedelta
 import random
-from sqlalchemy import text
 
 
 class SampleDataManager:
@@ -41,8 +40,6 @@ class SampleDataManager:
 
         if self.use_azure and azure_config:
             try:
-                from sqlalchemy import create_engine
-
                 connection_string = azure_config.get_database_connection_string()
                 if connection_string:
                     self.sqlalchemy_engine = create_engine(
@@ -63,52 +60,37 @@ class SampleDataManager:
     def _create_azure_database(self):
         """Azure SQL Database 샘플 데이터 생성"""
         try:
-            import pyodbc
-        except ImportError:
-            raise ImportError("pyodbc가 필요합니다: pip install pyodbc")
+            # 🔥 수정: pyodbc 대신 SQLAlchemy 사용
+            self.logger.info("Azure SQL Database에 연결 중...")
 
-        conn_string = self.azure_config.get_database_connection_string()
-        if not conn_string or not conn_string.strip():
-            raise ValueError("Azure SQL Database 연결 문자열이 설정되지 않았습니다")
-
-        try:
-            conn = pyodbc.connect(conn_string, timeout=30)
-        except Exception as e:
-            raise Exception(f"Azure SQL Database 연결 실패: {e}")
-
-        try:
             # 테이블 존재 여부 확인
-            if not self._azure_tables_exist(conn):
+            if not self._check_azure_tables_exist():
                 self.logger.info("Azure SQL Database에 테이블 생성 중...")
                 self._create_tables()
 
             # 기존 데이터 확인
-            data_count = self._check_azure_data(conn)
+            data_count = self._check_azure_data_count()
+            self.logger.info(f"기존 데이터 확인: {data_count}건")
 
-            # 충분한 데이터가 있으면 그대로 사용
-            if data_count["total"] > 50:
-                self.logger.info(
-                    f"충분한 샘플 데이터가 존재합니다 ({data_count['total']:,}건)"
-                )
-                return conn
+            # 데이터가 부족하면 생성
+            if data_count < 50:
+                self.logger.info("샘플 데이터 생성 중...")
+                self._generate_azure_sample_data()
+                # self._generate_data()
 
-            # 데이터 추가 생성
-            self.logger.info("샘플 데이터 생성 중...")
-            self._generate_data(conn)
-
-            return conn
+            # SQLAlchemy 엔진 반환 (연결 객체 대신)
+            return self.sqlalchemy_engine
 
         except Exception as e:
-            conn.close()
+            self.logger.error(f"Azure 데이터베이스 생성 실패: {e}")
             raise e
 
     def _create_local_database(self):
-        """로컬 SQLite 샘플 데이터 생성"""
+        """로컬 SQLite 샘플 데이터 생성 - 수정"""
         conn = sqlite3.connect(":memory:", check_same_thread=False)
 
-        # 테이블 생성
-        # self._create_sqlite_tables(conn)
-        self._create_tables()
+        # 🔥 수정: SQLite 전용 테이블 생성 메서드 호출
+        self._create_sqlite_tables(conn)
 
         # 샘플 데이터 생성
         self._generate_data(conn)
@@ -165,8 +147,8 @@ class SampleDataManager:
             if not tables_exist:
                 self.logger.info("테이블이 존재하지 않습니다. 테이블 생성 중...")
                 self._create_tables()
-                # self._generate_azure_sample_data()
-                self._generate_data()
+                # 🔥 수정: _generate_data 대신 _generate_azure_sample_data 호출
+                self._generate_azure_sample_data()
             else:
                 self.logger.info("Azure SQL Database 테이블이 이미 존재합니다.")
 
@@ -195,6 +177,27 @@ class SampleDataManager:
             self.logger.error(f"테이블 존재 확인 실패: {e}")
             return False
 
+    def _check_azure_data_count(self) -> int:
+        """Azure SQL Database 데이터 개수 확인"""
+        try:
+            with self.sqlalchemy_engine.connect() as conn:
+                # 전체 테이블의 데이터 개수 확인
+                result = conn.execute(
+                    text(
+                        """
+                    SELECT 
+                        (SELECT COUNT(*) FROM PY_NP_TRMN_RMNY_TXN) +
+                        (SELECT COUNT(*) FROM PY_NP_SBSC_RMNY_TXN) +
+                        (SELECT COUNT(*) FROM PY_DEPAZ_BAS) as total_count
+                """
+                    )
+                )
+                row = result.fetchone()
+                return row[0] if row else 0
+        except Exception as e:
+            self.logger.error(f"데이터 개수 확인 실패: {e}")
+            return 0
+
     def _create_tables(self):
         """Azure SQL Database 테이블 생성"""
         try:
@@ -203,22 +206,21 @@ class SampleDataManager:
                 conn.execute(
                     text(
                         """
-                    IF NOT EXISTS (SELECT * FROM INFORMATION_SCHEMA.TABLES WHERE TABLE_NAME = 'PY_NP_TRMN_RMNY_TXN')
+                   IF NOT EXISTS (SELECT * FROM INFORMATION_SCHEMA.TABLES WHERE TABLE_NAME = 'PY_NP_TRMN_RMNY_TXN')
                     CREATE TABLE PY_NP_TRMN_RMNY_TXN (
                         NP_DIV_CD NVARCHAR(3),
                         TRMN_NP_ADM_NO NVARCHAR(11) PRIMARY KEY,
                         NP_TRMN_DATE DATE NOT NULL,
                         CNCL_WTHD_DATE DATE,
-                        BCHNG_COMM_CMPN_ID NVARCHAR(50),
-                        ACHNG_COMM_CMPN_ID NVARCHAR(50),
+                        BCHNG_COMM_CMPN_ID NVARCHAR(10),
+                        ACHNG_COMM_CMPN_ID NVARCHAR(10),
                         SVC_CONT_ID NVARCHAR(20),
                         BILL_ACC_ID NVARCHAR(11),
                         TEL_NO NVARCHAR(20),
                         NP_TRMN_DTL_STTUS_VAL NVARCHAR(3),
-                        PAY_AMT DECIMAL(18,3),
-                        CREATED_AT DATETIME2 DEFAULT GETDATE()
+                        PAY_AMT DECIMAL(18,3)
                     )
-                """
+                    """
                     )
                 )
 
@@ -226,22 +228,21 @@ class SampleDataManager:
                 conn.execute(
                     text(
                         """
-                    IF NOT EXISTS (SELECT * FROM INFORMATION_SCHEMA.TABLES WHERE TABLE_NAME = 'PY_NP_SBSC_RMNY_TXN')
-                    CREATE TABLE PY_NP_SBSC_RMNY_TXN (
-                        NP_DIV_CD NVARCHAR(3),
-                        NP_SBSC_RMNY_SEQ INT IDENTITY(1,1) PRIMARY KEY,
-                        TRT_DATE DATE NOT NULL,
-                        CNCL_DATE DATE,
-                        BCHNG_COMM_CMPN_ID NVARCHAR(50),
-                        ACHNG_COMM_CMPN_ID NVARCHAR(50),
-                        SVC_CONT_ID NVARCHAR(20),
-                        BILL_ACC_ID NVARCHAR(11),
-                        TEL_NO NVARCHAR(20),
-                        NP_STTUS_CD NVARCHAR(3),
-                        SETL_AMT DECIMAL(15,2),
-                        CREATED_AT DATETIME2 DEFAULT GETDATE()
-                    )
-                """
+                        IF NOT EXISTS (SELECT * FROM INFORMATION_SCHEMA.TABLES WHERE TABLE_NAME = 'PY_NP_SBSC_RMNY_TXN')
+                        CREATE TABLE PY_NP_SBSC_RMNY_TXN (
+                            NP_DIV_CD NVARCHAR(3),
+                            NP_SBSC_RMNY_SEQ NVARCHAR(11) PRIMARY KEY,
+                            TRT_DATE DATE NOT NULL,
+                            CNCL_DATE DATE,
+                            BCHNG_COMM_CMPN_ID NVARCHAR(10),
+                            ACHNG_COMM_CMPN_ID NVARCHAR(10),
+                            SVC_CONT_ID NVARCHAR(20),
+                            BILL_ACC_ID NVARCHAR(11),
+                            TEL_NO NVARCHAR(20),
+                            NP_STTUS_CD NVARCHAR(3),
+                            SETL_AMT DECIMAL(18,3)
+                        )
+                        """
                     )
                 )
 
@@ -249,18 +250,17 @@ class SampleDataManager:
                 conn.execute(
                     text(
                         """
-                    IF NOT EXISTS (SELECT * FROM INFORMATION_SCHEMA.TABLES WHERE TABLE_NAME = 'PY_DEPAZ_BAS')
-                    CREATE TABLE PY_DEPAZ_BAS (
-                        DEPAZ_SEQ INT IDENTITY(1,1) PRIMARY KEY,
-                        SVC_CONT_ID NVARCHAR(20),
-                        BILL_ACC_ID NVARCHAR(11),
-                        DEPAZ_DIV_CD NVARCHAR(3),
-                        RMNY_DATE DATE,
-                        RMNY_METH_CD NVARCHAR(5),
-                        DEPAZ_AMT DECIMAL(15,2),
-                        CREATED_AT DATETIME2 DEFAULT GETDATE()
-                    )
-                """
+                        IF NOT EXISTS (SELECT * FROM INFORMATION_SCHEMA.TABLES WHERE TABLE_NAME = 'PY_DEPAZ_BAS')
+                        CREATE TABLE PY_DEPAZ_BAS (
+                            DEPAZ_SEQ NVARCHAR(11) PRIMARY KEY,
+                            SVC_CONT_ID NVARCHAR(20),
+                            BILL_ACC_ID NVARCHAR(11),
+                            DEPAZ_DIV_CD NVARCHAR(3),
+                            RMNY_DATE DATE,
+                            RMNY_METH_CD NVARCHAR(5),
+                            DEPAZ_AMT DECIMAL(15,3)
+                        )
+                        """
                     )
                 )
 
@@ -271,196 +271,65 @@ class SampleDataManager:
             self.logger.error(f"Azure 테이블 생성 실패: {e}")
             raise e
 
-    # def _create_azure_tables(self):
-    #     """Azure SQL Database 테이블 생성"""
-    #     try:
-    #         with self.sqlalchemy_engine.connect() as conn:
-    #             # 포트아웃 테이블 생성
-    #             conn.execute(
-    #                 text(
-    #                     """
-    #                 IF NOT EXISTS (SELECT * FROM INFORMATION_SCHEMA.TABLES WHERE TABLE_NAME = 'PY_NP_TRMN_RMNY_TXN')
-    #                 CREATE TABLE PY_NP_TRMN_RMNY_TXN (
-    #                     NP_DIV_CD NVARCHAR(3),
-    #                     TRMN_NP_ADM_NO NVARCHAR(11) PRIMARY KEY,
-    #                     NP_TRMN_DATE DATE NOT NULL,
-    #                     CNCL_WTHD_DATE DATE,
-    #                     BCHNG_COMM_CMPN_ID NVARCHAR(50),
-    #                     ACHNG_COMM_CMPN_ID NVARCHAR(50),
-    #                     SVC_CONT_ID NVARCHAR(20),
-    #                     BILL_ACC_ID NVARCHAR(11),
-    #                     TEL_NO NVARCHAR(20),
-    #                     NP_TRMN_DTL_STTUS_VAL NVARCHAR(3),
-    #                     PAY_AMT DECIMAL(18,3),
-    #                     CREATED_AT DATETIME2 DEFAULT GETDATE()
-    #                 )
-    #             """
-    #                 )
-    #             )
+    def _create_sqlite_tables(self, conn):
+        """SQLite 테이블 생성"""
+        cursor = conn.cursor()
 
-    #             # 포트인 테이블 생성
-    #             conn.execute(
-    #                 text(
-    #                     """
-    #                 IF NOT EXISTS (SELECT * FROM INFORMATION_SCHEMA.TABLES WHERE TABLE_NAME = 'PY_NP_SBSC_RMNY_TXN')
-    #                 CREATE TABLE PY_NP_SBSC_RMNY_TXN (
-    #                     NP_DIV_CD NVARCHAR(3),
-    #                     NP_SBSC_RMNY_SEQ INT IDENTITY(1,1) PRIMARY KEY,
-    #                     TRT_DATE DATE NOT NULL,
-    #                     CNCL_DATE DATE,
-    #                     BCHNG_COMM_CMPN_ID NVARCHAR(50),
-    #                     ACHNG_COMM_CMPN_ID NVARCHAR(50),
-    #                     SVC_CONT_ID NVARCHAR(20),
-    #                     BILL_ACC_ID NVARCHAR(11),
-    #                     TEL_NO NVARCHAR(20),
-    #                     NP_STTUS_CD NVARCHAR(3),
-    #                     SETL_AMT DECIMAL(15,2),
-    #                     CREATED_AT DATETIME2 DEFAULT GETDATE()
-    #                 )
-    #             """
-    #                 )
-    #             )
+        # 포트아웃 테이블
+        cursor.execute(
+            """
+            CREATE TABLE PY_NP_TRMN_RMNY_TXN (
+                NP_DIV_CD VARCHAR(3),
+                TRMN_NP_ADM_NO VARCHAR(11) PRIMARY KEY,
+                NP_TRMN_DATE DATE NOT NULL,
+                CNCL_WTHD_DATE DATE,
+                BCHNG_COMM_CMPN_ID VARCHAR(50),
+                ACHNG_COMM_CMPN_ID VARCHAR(50),
+                SVC_CONT_ID VARCHAR(20),
+                BILL_ACC_ID VARCHAR(11),
+                TEL_NO VARCHAR(20),
+                NP_TRMN_DTL_STTUS_VAL VARCHAR(3),
+                PAY_AMT DECIMAL(18,3)
+            )
+        """
+        )
 
-    #             # 예치금 테이블 생성
-    #             conn.execute(
-    #                 text(
-    #                     """
-    #                 IF NOT EXISTS (SELECT * FROM INFORMATION_SCHEMA.TABLES WHERE TABLE_NAME = 'PY_DEPAZ_BAS')
-    #                 CREATE TABLE PY_DEPAZ_BAS (
-    #                     DEPAZ_SEQ INT IDENTITY(1,1) PRIMARY KEY,
-    #                     SVC_CONT_ID NVARCHAR(20),
-    #                     BILL_ACC_ID NVARCHAR(11),
-    #                     DEPAZ_DIV_CD NVARCHAR(3),
-    #                     RMNY_DATE DATE,
-    #                     RMNY_METH_CD NVARCHAR(5),
-    #                     DEPAZ_AMT DECIMAL(15,2),
-    #                     CREATED_AT DATETIME2 DEFAULT GETDATE()
-    #                 )
-    #             """
-    #                 )
-    #             )
+        # 포트인 테이블
+        cursor.execute(
+            """
+            CREATE TABLE PY_NP_SBSC_RMNY_TXN (
+                NP_DIV_CD VARCHAR(3),
+                NP_SBSC_RMNY_SEQ VARCHAR(11) PRIMARY KEY,
+                TRT_DATE DATE NOT NULL,
+                CNCL_DATE DATE,
+                BCHNG_COMM_CMPN_ID VARCHAR(50),
+                ACHNG_COMM_CMPN_ID VARCHAR(50),
+                SVC_CONT_ID VARCHAR(20),
+                BILL_ACC_ID VARCHAR(11),
+                TEL_NO VARCHAR(20),
+                NP_STTUS_CD VARCHAR(3),
+                SETL_AMT DECIMAL(15,2)
+            )
+        """
+        )
 
-    #             conn.commit()
-    #             self.logger.info("Azure SQL Database 테이블 생성 완료")
+        # 예치금 테이블
+        cursor.execute(
+            """
+            CREATE TABLE PY_DEPAZ_BAS (
+                DEPAZ_SEQ VARCHAR(11) PRIMARY KEY,
+                SVC_CONT_ID VARCHAR(20),
+                BILL_ACC_ID VARCHAR(11),
+                DEPAZ_DIV_CD VARCHAR(3),
+                RMNY_DATE DATE,
+                RMNY_METH_CD VARCHAR(5),
+                DEPAZ_AMT DECIMAL(15,2)
+            )
+        """
+        )
 
-    #     except Exception as e:
-    #         self.logger.error(f"Azure 테이블 생성 실패: {e}")
-    #         raise e
-
-    # def _generate_azure_sample_data(self):
-    #     """Azure SQL Database 샘플 데이터 생성"""
-    #     try:
-    #         operators = ["KT", "SKT", "LGU+"]
-
-    #         with self.sqlalchemy_engine.connect() as conn:
-    #             # 포트아웃 데이터 생성 (50건)
-    #             for i in range(50):
-    #                 random_days = random.randint(0, 90)
-    #                 transaction_date = (
-    #                     datetime.now() - timedelta(days=random_days)
-    #                 ).strftime("%Y-%m-%d")
-
-    #                 from_operator = random.choice(operators)
-    #                 to_operator = random.choice(
-    #                     [op for op in operators if op != from_operator]
-    #                 )
-    #                 status = random.choice(["1", "2", "3"])
-    #                 pay_amount = random.randint(10000, 100000)
-
-    #                 conn.execute(
-    #                     text(
-    #                         """
-    #                     INSERT INTO PY_NP_TRMN_RMNY_TXN
-    #                     (NP_DIV_CD, TRMN_NP_ADM_NO, NP_TRMN_DATE, BCHNG_COMM_CMPN_ID,
-    #                     ACHNG_COMM_CMPN_ID, SVC_CONT_ID, BILL_ACC_ID, TEL_NO,
-    #                     NP_TRMN_DTL_STTUS_VAL, PAY_AMT)
-    #                     VALUES (:np_div_cd, :trmn_np_adm_no, :np_trmn_date, :bchng_comm_cmpn_id,
-    #                             :achng_comm_cmpn_id, :svc_cont_id, :bill_acc_id, :tel_no,
-    #                             :np_trmn_dtl_sttus_val, :pay_amt)
-    #                 """
-    #                     ),
-    #                     {
-    #                         "np_div_cd": "OUT",
-    #                         "trmn_np_adm_no": f"OUT{i+1:07d}",
-    #                         "np_trmn_date": transaction_date,
-    #                         "bchng_comm_cmpn_id": from_operator,
-    #                         "achng_comm_cmpn_id": to_operator,
-    #                         "svc_cont_id": f"{i+1:020d}",
-    #                         "bill_acc_id": f"{i+1:011d}",
-    #                         "tel_no": f"010{random.randint(1000,9999)}{random.randint(1000,9999)}",
-    #                         "np_trmn_dtl_sttus_val": status,
-    #                         "pay_amt": pay_amount,
-    #                     },
-    #                 )
-
-    #             # 포트인 데이터 생성 (50건)
-    #             for i in range(50):
-    #                 random_days = random.randint(0, 90)
-    #                 transaction_date = (
-    #                     datetime.now() - timedelta(days=random_days)
-    #                 ).strftime("%Y-%m-%d")
-
-    #                 from_operator = random.choice(operators)
-    #                 to_operator = random.choice(
-    #                     [op for op in operators if op != from_operator]
-    #                 )
-    #                 status = random.choice(["OK", "CN", "WD"])
-    #                 setl_amount = random.randint(10000, 100000)
-
-    #                 conn.execute(
-    #                     text(
-    #                         """
-    #                     INSERT INTO PY_NP_SBSC_RMNY_TXN
-    #                     (NP_DIV_CD, TRT_DATE, BCHNG_COMM_CMPN_ID, ACHNG_COMM_CMPN_ID,
-    #                     SVC_CONT_ID, BILL_ACC_ID, TEL_NO, NP_STTUS_CD, SETL_AMT)
-    #                     VALUES (:np_div_cd, :trt_date, :bchng_comm_cmpn_id, :achng_comm_cmpn_id,
-    #                             :svc_cont_id, :bill_acc_id, :tel_no, :np_sttus_cd, :setl_amt)
-    #                 """
-    #                     ),
-    #                     {
-    #                         "np_div_cd": "IN",
-    #                         "trt_date": transaction_date,
-    #                         "bchng_comm_cmpn_id": from_operator,
-    #                         "achng_comm_cmpn_id": to_operator,
-    #                         "svc_cont_id": f"{i+100:020d}",
-    #                         "bill_acc_id": f"{i+100:011d}",
-    #                         "tel_no": f"010{random.randint(1000,9999)}{random.randint(1000,9999)}",
-    #                         "np_sttus_cd": status,
-    #                         "setl_amt": setl_amount,
-    #                     },
-    #                 )
-
-    #             # 예치금 데이터 생성 (50건)
-    #             for i in range(50):
-    #                 random_days = random.randint(0, 90)
-    #                 deposit_date = (
-    #                     datetime.now() - timedelta(days=random_days)
-    #                 ).strftime("%Y-%m-%d")
-
-    #                 conn.execute(
-    #                     text(
-    #                         """
-    #                     INSERT INTO PY_DEPAZ_BAS
-    #                     (SVC_CONT_ID, BILL_ACC_ID, DEPAZ_DIV_CD, RMNY_DATE, RMNY_METH_CD, DEPAZ_AMT)
-    #                     VALUES (:svc_cont_id, :bill_acc_id, :depaz_div_cd, :rmny_date, :rmny_meth_cd, :depaz_amt)
-    #                 """
-    #                     ),
-    #                     {
-    #                         "svc_cont_id": f"{i+200:020d}",
-    #                         "bill_acc_id": f"{i+200:011d}",
-    #                         "depaz_div_cd": random.choice(["10", "90"]),
-    #                         "rmny_date": deposit_date,
-    #                         "rmny_meth_cd": random.choice(["NA", "CA"]),
-    #                         "depaz_amt": random.randint(5000, 50000),
-    #                     },
-    #                 )
-
-    #             conn.commit()
-    #             self.logger.info("Azure SQL Database 샘플 데이터 생성 완료")
-
-    #     except Exception as e:
-    #         self.logger.error(f"Azure 샘플 데이터 생성 실패: {e}")
-    #         raise e
+        conn.commit()
+        self.logger.info("SQLite 테이블 생성 완료")
 
     # def _create_sqlite_tables(self, conn):
     #     """SQLite 테이블 생성"""
@@ -521,6 +390,162 @@ class SampleDataManager:
 
     #     conn.commit()
     #     self.logger.info("SQLite 테이블 생성 완료")
+
+    def _generate_azure_sample_data(self):
+        """Azure SQL Database 샘플 데이터 생성 - SQL Server 문법으로 수정"""
+        try:
+            operators = ["KT", "SKT", "LGU+", "KT MVNO", "SKT MVNO", "LGU+ MVNO"]
+
+            # 최근 4개월 기간
+            end_date = datetime.now()
+            start_date = end_date - timedelta(days=120)
+
+            with self.sqlalchemy_engine.connect() as conn:
+                trans = conn.begin()  # 트랜잭션 시작
+
+                try:
+                    # 🔥 수정: SQLite 문법 대신 SQL Server 문법 사용
+                    # 포트아웃 데이터 생성 (50건)
+                    self.logger.info("포트아웃 데이터 생성 중...")
+                    for i in range(50):
+                        random_days = random.randint(0, (end_date - start_date).days)
+                        transaction_date = start_date + timedelta(days=random_days)
+
+                        from_operator = random.choice(["KT", "KT MVNO"])
+                        to_operator = random.choice(
+                            [op for op in operators if op != from_operator]
+                        )
+                        np_trmn_dtl_sttus_val = random.choice(["1", "2", "3"])
+
+                        np_trmn_date = transaction_date.strftime("%Y-%m-%d")
+                        cncl_wthd_date = None
+                        if np_trmn_dtl_sttus_val == "2":
+                            cncl_wthd_date = np_trmn_date
+                        elif np_trmn_dtl_sttus_val == "3":
+                            random_days_cancel = random.randint(1, 15)
+                            cncl_wthd_date = (
+                                transaction_date + timedelta(days=random_days_cancel)
+                            ).strftime("%Y-%m-%d")
+
+                        svc_cont_id = f"{i+1:020d}"
+                        bill_acc_id = f"{i+1:011d}"
+                        tel_no = (
+                            f"010{random.randint(1000,9999)}{random.randint(1000,9999)}"
+                        )
+                        pay_amount = random.randint(10000, 100000)
+
+                        # 🔥 수정: SQL Server 전용 INSERT 문법 사용
+                        conn.execute(
+                            text(
+                                """
+                            INSERT INTO PY_NP_TRMN_RMNY_TXN 
+                            (NP_DIV_CD, TRMN_NP_ADM_NO, NP_TRMN_DATE, CNCL_WTHD_DATE, 
+                            BCHNG_COMM_CMPN_ID, ACHNG_COMM_CMPN_ID, SVC_CONT_ID, 
+                            BILL_ACC_ID, TEL_NO, NP_TRMN_DTL_STTUS_VAL, PAY_AMT)
+                            VALUES (:np_div_cd, :trmn_np_adm_no, :np_trmn_date, :cncl_wthd_date,
+                                    :bchng_comm_cmpn_id, :achng_comm_cmpn_id, :svc_cont_id,
+                                    :bill_acc_id, :tel_no, :np_trmn_dtl_sttus_val, :pay_amt)
+                        """
+                            ),
+                            {
+                                "np_div_cd": "OUT",
+                                "trmn_np_adm_no": f"OUT{i+1:07d}",
+                                "np_trmn_date": np_trmn_date,
+                                "cncl_wthd_date": cncl_wthd_date,
+                                "bchng_comm_cmpn_id": from_operator,
+                                "achng_comm_cmpn_id": to_operator,
+                                "svc_cont_id": svc_cont_id,
+                                "bill_acc_id": bill_acc_id,
+                                "tel_no": tel_no,
+                                "np_trmn_dtl_sttus_val": np_trmn_dtl_sttus_val,
+                                "pay_amt": pay_amount,
+                            },
+                        )
+
+                        conn.execute(
+                            text(
+                                """
+                            INSERT INTO PY_DEPAZ_BAS
+                            (DEPAZ_SEQ, SVC_CONT_ID, BILL_ACC_ID, DEPAZ_DIV_CD, RMNY_DATE, 
+                            RMNY_METH_CD, DEPAZ_AMT)
+                            VALUES (:depaz_seq, :svc_cont_id, :bill_acc_id, :depaz_div_cd, :rmny_date,
+                                    :rmny_meth_cd, :depaz_amt)
+                                """
+                            ),
+                            {
+                                "depaz_seq": f"DEP{i+1:08d}",
+                                "svc_cont_id": svc_cont_id,
+                                "bill_acc_id": bill_acc_id,
+                                "depaz_div_cd": random.choice(["10", "90"]),
+                                "rmny_date": np_trmn_date,
+                                "rmny_meth_cd": random.choice(["NA", "CA"]),
+                                "depaz_amt": pay_amount,
+                            },
+                        )
+
+                    # 포트인 데이터 생성 (50건)
+                    self.logger.info("포트인 데이터 생성 중...")
+                    for i in range(50):
+                        random_days = random.randint(0, (end_date - start_date).days)
+                        transaction_date = start_date + timedelta(days=random_days)
+
+                        to_operator = random.choice(["KT", "KT MVNO"])
+                        from_operator = random.choice(
+                            [op for op in operators if op != to_operator]
+                        )
+                        np_sttus_cd = random.choice(["OK", "CN", "WD"])
+
+                        trt_date = transaction_date.strftime("%Y-%m-%d")
+                        cncl_date = None
+                        if np_sttus_cd == "CN":
+                            cncl_date = trt_date
+                        elif np_sttus_cd == "WD":
+                            random_days_cancel = random.randint(1, 15)
+                            cncl_date = (
+                                transaction_date + timedelta(days=random_days_cancel)
+                            ).strftime("%Y-%m-%d")
+
+                        setl_amount = random.randint(10000, 100000)
+
+                        # 🔥 수정: IDENTITY 컬럼이므로 NP_SBSC_RMNY_SEQ 제외
+                        conn.execute(
+                            text(
+                                """
+                            INSERT INTO PY_NP_SBSC_RMNY_TXN
+                            (NP_DIV_CD, NP_SBSC_RMNY_SEQ, TRT_DATE, CNCL_DATE, BCHNG_COMM_CMPN_ID, 
+                            ACHNG_COMM_CMPN_ID, SVC_CONT_ID, BILL_ACC_ID, TEL_NO, 
+                            NP_STTUS_CD, SETL_AMT)
+                            VALUES (:np_div_cd, :np_sbsc_rmny_seq, :trt_date, :cncl_date, :bchng_comm_cmpn_id,
+                                    :achng_comm_cmpn_id, :svc_cont_id, :bill_acc_id, :tel_no,
+                                    :np_sttus_cd, :setl_amt)
+                                """
+                            ),
+                            {
+                                "np_div_cd": "IN",
+                                "np_sbsc_rmny_seq": f"IN{i+1:08d}",
+                                "trt_date": trt_date,
+                                "cncl_date": cncl_date,
+                                "bchng_comm_cmpn_id": from_operator,
+                                "achng_comm_cmpn_id": to_operator,
+                                "svc_cont_id": f"{i+100:020d}",
+                                "bill_acc_id": f"{i+100:011d}",
+                                "tel_no": f"010{random.randint(1000,9999)}{random.randint(1000,9999)}",
+                                "np_sttus_cd": np_sttus_cd,
+                                "setl_amt": setl_amount,
+                            },
+                        )
+
+                    trans.commit()  # 트랜잭션 커밋
+                    self.logger.info("✅ Azure SQL Database 샘플 데이터 생성 완료")
+
+                except Exception as e:
+                    trans.rollback()  # 오류 시 롤백
+                    self.logger.error(f"Azure 샘플 데이터 생성 중 오류: {e}")
+                    raise e
+
+        except Exception as e:
+            self.logger.error(f"Azure 샘플 데이터 생성 실패: {e}")
+            raise e
 
     def _generate_data(self, conn):
         """Azure SQL Database 샘플 데이터 생성"""
@@ -660,51 +685,63 @@ class SampleDataManager:
         }
 
     def cleanup_sample_data(self, conn):
-        """샘플 데이터 정리 (Azure만 해당)"""
-        if not self.use_sample_data:
+        """샘플 데이터 정리 - CREATED_AT 컬럼 없이"""
+        if self.use_sample_data:  # SQLite 모드
             self.logger.info("SQLite는 메모리 기반이므로 정리가 불필요합니다")
             return
 
         try:
-            cursor = conn.cursor()
+            # 🔥 수정: CREATED_AT 컬럼이 없으므로 전체 삭제 또는 다른 방식 사용
+            with self.sqlalchemy_engine.connect() as conn:
+                # 최근에 생성된 테스트 데이터만 삭제 (예: TEL_NO 패턴으로)
+                conn.execute(
+                    text(
+                        "DELETE FROM PY_NP_TRMN_RMNY_TXN WHERE TRMN_NP_ADM_NO LIKE 'OUT%'"
+                    )
+                )
+                conn.execute(
+                    text(
+                        "DELETE FROM PY_NP_SBSC_RMNY_TXN WHERE SVC_CONT_ID LIKE '%00000000000000000%'"
+                    )
+                )
+                conn.execute(
+                    text(
+                        "DELETE FROM PY_DEPAZ_BAS WHERE SVC_CONT_ID LIKE '%00000000000000000%'"
+                    )
+                )
 
-            # Azure SQL에서 샘플 데이터 삭제
-            cursor.execute(
-                "DELETE FROM PY_NP_TRMN_RMNY_TXN WHERE CREATED_AT >= DATEADD(day, -1, GETDATE())"
-            )
-            cursor.execute(
-                "DELETE FROM PY_NP_SBSC_RMNY_TXN WHERE CREATED_AT >= DATEADD(day, -1, GETDATE())"
-            )
-            cursor.execute(
-                "DELETE FROM PY_DEPAZ_BAS WHERE CREATED_AT >= DATEADD(day, -1, GETDATE())"
-            )
-
-            conn.commit()
             self.logger.info("Azure SQL Database 샘플 데이터 정리 완료")
 
         except Exception as e:
             self.logger.error(f"샘플 데이터 정리 실패: {e}")
 
+    def create_database(self):
+        """샘플 데이터베이스 생성 (인스턴스 메서드) - 이름 변경"""
+        self.logger.info(f"샘플 데이터 생성 시작 - Azure 모드: {self.use_azure}")
+        try:
+            if self.use_azure:
+                # Azure SQL Database 모드
+                self.logger.info("Azure SQL Database 샘플 데이터 생성 중...")
+                return self._create_azure_database()
+            else:
+                # 로컬 SQLite 모드
+                self.logger.info("로컬 SQLite 샘플 데이터 생성 중...")
+                return self._create_local_database()
+        except Exception as e:
+            self.logger.error(f"샘플 데이터베이스 생성 실패: {e}")
+            # Azure 실패시 로컬로 폴백
+            if self.use_azure:
+                self.logger.warning("Azure 연결 실패, 로컬 SQLite로 전환")
+                self.use_azure = False
+                self.use_sample_data = True
+                return self._create_local_database()
+            raise e
 
-def create_sample_database(self):
-    """샘플 데이터베이스 생성 (인스턴스 메서드)"""
-    try:
-        if self.use_azure:
-            # Azure SQL Database 모드
-            self.logger.info("Azure SQL Database 샘플 데이터 생성 중...")
-            return self._create_azure_database()
-        else:
-            # 로컬 SQLite 모드
-            self.logger.info("로컬 SQLite 샘플 데이터 생성 중...")
-            return self._create_local_database()
-    except Exception as e:
-        self.logger.error(f"샘플 데이터베이스 생성 실패: {e}")
-        # Azure 실패시 로컬로 폴백
-        if self.use_azure:
-            self.logger.warning("Azure 연결 실패, 로컬 SQLite로 전환")
-            self.use_azure = False
-            return self._create_local_database()
-        raise e
+
+def create_sample_database(azure_config=None, force_local: bool = True):
+    """샘플 데이터베이스 생성 (전역 함수 - 호환성 유지)"""
+    manager = SampleDataManager(azure_config, force_local)
+    return manager.create_database()
 
 
 def get_sample_statistics(conn):
@@ -768,75 +805,142 @@ def get_sample_statistics(conn):
 
 
 # 테스트 함수
-def test_sample_data_manager():
-    """샘플 데이터 매니저 테스트"""
-    print("🧪 샘플 데이터 매니저 테스트를 시작합니다...")
+# def test_sample_data_manager():
+#     """샘플 데이터 매니저 테스트"""
+#     print("🧪 샘플 데이터 매니저 테스트를 시작합니다...")
 
+#     try:
+#         # Azure 설정 로드 시도
+#         try:
+#             from azure_config import get_azure_config
+
+#             azure_config = get_azure_config()
+#             print(f"Azure 설정 로드 성공")
+#         except Exception as e:
+#             print(f"Azure 설정 로드 실패: {e}")
+#             azure_config = None
+
+#         # 1. Azure 모드 테스트 (가능한 경우)
+#         if azure_config and azure_config.is_production_ready():
+#             print("\n☁️ Azure SQL Database 모드 테스트:")
+#             try:
+#                 azure_manager = SampleDataManager(azure_config, force_local=False)
+#                 azure_conn = azure_manager.create_sample_database()
+
+#                 connection_info = azure_manager.get_connection_info()
+#                 print(f"   연결 타입: {connection_info['type']}")
+
+#                 # 통계 확인
+#                 stats = azure_manager.get_sample_statistics(azure_conn)
+#                 if stats:
+#                     print("   📊 Azure 데이터 통계:")
+#                     for data_type, stat in stats.items():
+#                         count = stat.get("total_count", 0)
+#                         amount = stat.get("total_amount", 0)
+#                         print(f"     {data_type}: {count:,}건, {amount:,.0f}원")
+
+#                 azure_conn.close()
+#                 print("   ✅ Azure 모드 테스트 성공")
+#             except Exception as e:
+#                 print(f"   ❌ Azure 모드 테스트 실패: {e}")
+
+#         # 2. 로컬 모드 테스트
+#         print("\n💻 로컬 SQLite 모드 테스트:")
+#         local_manager = SampleDataManager(azure_config, force_local=True)
+#         local_conn = local_manager.create_sample_database()
+
+#         connection_info = local_manager.get_connection_info()
+#         print(f"   연결 타입: {connection_info['type']}")
+
+#         # 통계 확인
+#         stats = local_manager.get_sample_statistics(local_conn)
+#         if stats:
+#             print("   📊 로컬 데이터 통계:")
+#             for data_type, stat in stats.items():
+#                 count = stat.get("total_count", 0)
+#                 amount = stat.get("total_amount", 0)
+#                 print(f"     {data_type}: {count:,}건, {amount:,.0f}원")
+
+#         # 3. 호환성 테스트
+#         print("\n🔄 기존 함수 호환성 테스트:")
+#         compat_conn = create_sample_database(azure_config, force_local=True)
+#         get_sample_statistics(compat_conn)
+
+#         print("\n✅ 모든 테스트 완료!")
+
+#     except Exception as e:
+#         print(f"\n❌ 테스트 실패: {e}")
+#         import traceback
+
+#         traceback.print_exc()
+
+
+def debug_azure_connection():
+    """Azure 연결 디버깅"""
     try:
-        # Azure 설정 로드 시도
-        try:
-            from azure_config import get_azure_config
+        from azure_config import get_azure_config
 
-            azure_config = get_azure_config()
-            print(f"Azure 설정 로드 성공")
-        except Exception as e:
-            print(f"Azure 설정 로드 실패: {e}")
-            azure_config = None
+        print("🔍 Azure 연결 디버깅을 시작합니다...")
 
-        # 1. Azure 모드 테스트 (가능한 경우)
-        if azure_config and azure_config.is_production_ready():
-            print("\n☁️ Azure SQL Database 모드 테스트:")
-            try:
-                azure_manager = SampleDataManager(azure_config, force_local=False)
-                azure_conn = azure_manager.create_sample_database()
+        azure_config = get_azure_config()
+        print(f"✅ Azure 설정 로드 성공")
 
-                connection_info = azure_manager.get_connection_info()
-                print(f"   연결 타입: {connection_info['type']}")
+        # 연결 문자열 확인
+        conn_string = azure_config.get_database_connection_string()
+        if conn_string:
+            print(f"✅ 연결 문자열 확인됨: {conn_string[:50]}...")
+        else:
+            print(f"❌ 연결 문자열이 없음")
+            return
 
-                # 통계 확인
-                stats = azure_manager.get_sample_statistics(azure_conn)
-                if stats:
-                    print("   📊 Azure 데이터 통계:")
-                    for data_type, stat in stats.items():
-                        count = stat.get("total_count", 0)
-                        amount = stat.get("total_amount", 0)
-                        print(f"     {data_type}: {count:,}건, {amount:,.0f}원")
+        # SQLAlchemy 엔진 생성 테스트
 
-                azure_conn.close()
-                print("   ✅ Azure 모드 테스트 성공")
-            except Exception as e:
-                print(f"   ❌ Azure 모드 테스트 실패: {e}")
+        engine = create_engine(conn_string, pool_timeout=20)
+        print(f"✅ SQLAlchemy 엔진 생성 성공")
 
-        # 2. 로컬 모드 테스트
-        print("\n💻 로컬 SQLite 모드 테스트:")
-        local_manager = SampleDataManager(azure_config, force_local=True)
-        local_conn = local_manager.create_sample_database()
+        # 연결 테스트
+        with engine.connect() as conn:
+            result = conn.execute(text("SELECT 1 as test"))
+            row = result.fetchone()
+            print(f"✅ Azure 연결 테스트 성공: {row[0]}")
 
-        connection_info = local_manager.get_connection_info()
-        print(f"   연결 타입: {connection_info['type']}")
+        # 샘플 데이터 매니저 생성
+        manager = SampleDataManager(azure_config, force_local=False)
+        print(f"✅ SampleDataManager 생성 성공")
+        print(f"   use_azure: {manager.use_azure}")
+        print(f"   use_sample_data: {manager.use_sample_data}")
 
-        # 통계 확인
-        stats = local_manager.get_sample_statistics(local_conn)
-        if stats:
-            print("   📊 로컬 데이터 통계:")
-            for data_type, stat in stats.items():
-                count = stat.get("total_count", 0)
-                amount = stat.get("total_amount", 0)
-                print(f"     {data_type}: {count:,}건, {amount:,.0f}원")
+        # 테이블 존재 확인
+        tables_exist = manager._check_azure_tables_exist()
+        print(f"📋 테이블 존재 여부: {tables_exist}")
 
-        # 3. 호환성 테스트
-        print("\n🔄 기존 함수 호환성 테스트:")
-        compat_conn = create_sample_database(azure_config, force_local=True)
-        get_sample_statistics(compat_conn)
+        if not tables_exist:
+            print("🔧 테이블 생성 중...")
+            manager._create_tables()
+            print("✅ 테이블 생성 완료")
 
-        print("\n✅ 모든 테스트 완료!")
+        # 데이터 개수 확인
+        data_count = manager._check_azure_data_count()
+        print(f"📊 기존 데이터 개수: {data_count}")
+
+        if data_count < 50:
+            print("📝 샘플 데이터 생성 중...")
+            manager._generate_azure_sample_data()
+
+            # 생성 후 재확인
+            new_count = manager._check_azure_data_count()
+            print(f"📊 생성 후 데이터 개수: {new_count}")
+
+        print("🎉 Azure 연결 디버깅 완료!")
 
     except Exception as e:
-        print(f"\n❌ 테스트 실패: {e}")
+        print(f"❌ 디버깅 중 오류: {e}")
         import traceback
 
         traceback.print_exc()
 
 
 if __name__ == "__main__":
-    test_sample_data_manager()
+    # test_sample_data_manager()
+    create_sample_database()
+    debug_azure_connection()
