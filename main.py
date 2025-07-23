@@ -1455,7 +1455,6 @@ def display_chatbot(db_manager):
                     st.session_state.conversation_history.append(conversation_item)
 
                     # 결과 표시
-                    st.markdown("---")
                     st.markdown("### 🎯 실행 결과")
 
                     if metadata["success"]:
