@@ -584,42 +584,42 @@ class DatabaseManager:
 
             # 데이터베이스 타입에 따른 쿼리 생성
             if self.use_sample_data:  # SQLite 샘플 데이터
-                if table_name in ["PY_NP_TRMN_RMNY_TXN"]:
-                    sample_query = f"""
-                    SELECT 
-                        SUBSTR(TEL_NO, 1, 3) || '****' || SUBSTR(TEL_NO, -4) as masked_phone,
-                        SVC_CONT_ID,
-                        PAY_AMT,
-                        BCHNG_COMM_CMPN_ID as operator,
-                        NP_TRMN_DATE as transaction_date
-                    FROM {table_name}
-                    ORDER BY NP_TRMN_DATE DESC
-                    LIMIT {limit}
-                    """
-                elif table_name == "PY_NP_SBSC_RMNY_TXN":
-                    sample_query = f"""
-                    SELECT 
-                        SUBSTR(TEL_NO, 1, 3) || '****' || SUBSTR(TEL_NO, -4) as masked_phone,
-                        SVC_CONT_ID,
-                        SETL_AMT,
-                        BCHNG_COMM_CMPN_ID as operator,
-                        TRT_DATE as transaction_date
-                    FROM {table_name}
-                    ORDER BY TRT_DATE DESC
-                    LIMIT {limit}
-                    """
-                else:  # PY_DEPAZ_BAS
-                    sample_query = f"""
-                    SELECT 
-                        SVC_CONT_ID,
-                        DEPAZ_AMT,
-                        DEPAZ_DIV_CD,
-                        RMNY_DATE as deposit_date
-                    FROM {table_name}
-                    ORDER BY RMNY_DATE DESC
-                    LIMIT {limit}
-                    """
-            else:  # Azure SQL Database
+                # if table_name in ["PY_NP_TRMN_RMNY_TXN"]:
+                #     sample_query = f"""
+                #     SELECT
+                #         SUBSTR(TEL_NO, 1, 3) || '****' || SUBSTR(TEL_NO, -4) as masked_phone,
+                #         SVC_CONT_ID,
+                #         PAY_AMT,
+                #         BCHNG_COMM_CMPN_ID as operator,
+                #         NP_TRMN_DATE as transaction_date
+                #     FROM {table_name}
+                #     ORDER BY NP_TRMN_DATE DESC
+                #     LIMIT {limit}
+                #     """
+                # elif table_name == "PY_NP_SBSC_RMNY_TXN":
+                #     sample_query = f"""
+                #     SELECT
+                #         SUBSTR(TEL_NO, 1, 3) || '****' || SUBSTR(TEL_NO, -4) as masked_phone,
+                #         SVC_CONT_ID,
+                #         SETL_AMT,
+                #         BCHNG_COMM_CMPN_ID as operator,
+                #         TRT_DATE as transaction_date
+                #     FROM {table_name}
+                #     ORDER BY TRT_DATE DESC
+                #     LIMIT {limit}
+                #     """
+                # else:  # PY_DEPAZ_BAS
+                #     sample_query = f"""
+                #     SELECT
+                #         SVC_CONT_ID,
+                #         DEPAZ_AMT,
+                #         DEPAZ_DIV_CD,
+                #         RMNY_DATE as deposit_date
+                #     FROM {table_name}
+                #     ORDER BY RMNY_DATE DESC
+                #     LIMIT {limit}
+                #     """
+                # else:  # Azure SQL Database
                 if table_name == "PY_NP_TRMN_RMNY_TXN":
                     sample_query = f"""
                     SELECT TOP {limit}
@@ -865,7 +865,7 @@ def test_database_manager():
             COUNT(*) as total_count,
             SUM(SETL_AMT) as total_amount
         FROM PY_NP_SBSC_RMNY_TXN
-        WHERE TRT_DATE >= date('now', '-1 months')
+        WHERE TRT_DATE >= DATEADD((month, -1, GETDATE())
             AND NP_STTUS_CD IN ('OK', 'WD')
         """
 

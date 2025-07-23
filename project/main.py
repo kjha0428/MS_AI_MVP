@@ -111,17 +111,7 @@ st.markdown(
         border-radius: 0 8px 8px 0;
         cursor: pointer;
     }
-    
-    .stButton > button {
-        background: linear-gradient(135deg, #667eea 0%, #764ba2 100%);
-        color: white;
-        border: none;
-        border-radius: 8px;
-        padding: 0.6rem 1.2rem;
-        font-weight: 500;
-        transition: all 0.3s ease;
-    }
-    
+       
     .success-alert {
         background: linear-gradient(135deg, #4facfe 0%, #00f2fe 100%);
         color: white;
@@ -1213,199 +1203,258 @@ def display_charts(port_in_df, port_out_df):
 
 
 def display_chatbot(db_manager):
-    """AI 챗봇 인터페이스 - DatabaseManager 사용"""
+    """AI 챗봇 인터페이스 - 대화형 구조"""
 
     st.header("🤖 Azure OpenAI 기반 자연어 SQL 쿼리 생성")
 
     # Azure 설정으로 SQL 생성기 초기화
     if "sql_generator" not in st.session_state:
         try:
-            from sql_generator import SQLGenerator
-
             azure_config = get_azure_config()
-
-            # 🔥 추가: OpenAI 배포 상태 확인
-            if azure_config.openai_api_key and azure_config.openai_endpoint:
-                deployment_status = azure_config.validate_openai_deployment()
-
-                if not deployment_status["model_available"]:
-                    st.warning(
-                        f"⚠️ OpenAI 모델 배포 문제: {deployment_status['recommendation']}"
-                    )
-
-                    # 사용 가능한 모델이 있으면 표시
-                    if deployment_status["available_models"]:
-                        with st.expander("🔍 사용 가능한 모델 목록"):
-                            for model in deployment_status["available_models"]:
-                                st.code(f"- {model}")
-
-                        # 첫 번째 사용 가능한 모델로 임시 변경
-                        azure_config.openai_model_name = deployment_status[
-                            "available_models"
-                        ][0]
-                        st.info(
-                            f"임시로 '{azure_config.openai_model_name}' 모델을 사용합니다."
-                        )
-
             st.session_state.sql_generator = SQLGenerator(azure_config)
-
         except Exception as e:
             st.error(f"SQL 생성기 초기화 실패: {e}")
-            st.info("규칙 기반 쿼리 생성만 사용됩니다.")
             st.session_state.sql_generator = None
 
-    # 채팅 히스토리 초기화
-    if "chat_history" not in st.session_state:
-        st.session_state.chat_history = []
+    # 대화 히스토리 초기화
+    if "conversation_history" not in st.session_state:
+        st.session_state.conversation_history = []
 
-    # 예시 쿼리 버튼들
+    # 현재 입력 초기화
+    if "current_input" not in st.session_state:
+        st.session_state.current_input = ""
+
+    # 예시 쿼리 버튼들 - 세로 배치
     st.subheader("💡 빠른 쿼리 예시")
-
-    col1, col2, col3 = st.columns(3)
-
-    with col1:
-        if st.button("📊 월별 포트인 현황"):
-            st.session_state.user_input = "월별 포트인 현황을 알려줘"
-
-    with col2:
-        if st.button("🔍 특정 번호 조회"):
-            st.session_state.user_input = (
-                "TEL_NO가 01012345678인 번호의 정산 내역 확인해줘"
-            )
-
-    with col3:
-        if st.button("📈 사업자별 집계"):
-            st.session_state.user_input = "COMM_CMPN_NM별 번호이동 정산 현황 보여줘"
+    quick_examples = [
+        ("📊 월별 포트인 현황", "월별 포트인 현황을 알려줘"),
+        ("🔍 특정 번호 조회", "TEL_NO가 01012345678인 번호의 정산 내역 확인해줘"),
+        ("📈 사업자별 집계", "사업자별 번호이동 정산 현황 보여줘"),
+    ]
+    for idx, (label, value) in enumerate(quick_examples):
+        if st.button(label, key=f"quick_{idx}"):
+            st.session_state.current_input = value
+            # st.rerun()
 
     # 추가 예시들
-    st.markdown("### 🎯 더 많은 예시")
-    examples = [
-        "최근 3개월 포트아웃 현황 알려줘",
-        "DEPAZ_AMT 합계를 COMM_CMPN_NM별로 보여줘",
-        "월별 SETL_AMT 추이 분석해줘",
-        "SETL_TRT_DATE가 최근 1개월인 데이터 요약해줘",
-    ]
+    with st.expander("🎯 더 많은 예시"):
+        examples = [
+            "최근 3개월 포트아웃 현황 알려줘",
+            "01012345678 데이터의 예치금 데이터 잘 쌓였는지 검증해줘",
+            "포트인 데이터 월별 추이 분석해줘",
+            "포트아웃 테이블에서 최근 1개월 발생한 데이터 요약해줘",
+        ]
+        for i, example in enumerate(examples):
+            if st.button(f"💬 {example}", key=f"example_{i}"):
+                st.session_state.current_input = example
+                # st.rerun()
 
-    for i, example in enumerate(examples):
-        if st.button(f"💬 {example}", key=f"example_{i}"):
-            st.session_state.user_input = example
+    # 질문 입력 부분
+    st.subheader("✨ 새로운 질문하기")
 
-    # 사용자 입력
+    # 질문 입력
+    # user_input = st.text_input(
+    #     "💬 질문을 입력하세요:",
+    #     value=st.session_state.current_input,
+    #     placeholder="예: '최근 3개월 포트아웃 현황 알려줘'",
+    #     key="user_question",
+    # )
+
     user_input = st.text_input(
         "💬 질문을 입력하세요:",
         key="user_input",
+        value=st.session_state.current_input,
         placeholder="예: '최근 3개월 COMM_CMPN_NM별 SETL_AMT 합계 알려줘'",
     )
 
-    if st.button("🚀 Azure AI로 쿼리 생성 및 실행") and user_input:
-        with st.spinner("🤖 Azure OpenAI가 쿼리를 생성하고 실행 중입니다..."):
+    # 버튼들 왼쪽 배치
+    col_btn, col_empty = st.columns([2, 6])
+    with col_btn:
+        submit_button = st.button(
+            "🚀 쿼리 생성 및 실행", key="submit_query", type="primary"
+        )
+        clear_button = st.button("🗑️ 대화 초기화", key="clear_chat")
+
+    # 대화 초기화 처리
+    if clear_button:
+        st.session_state.conversation_history = []
+        st.session_state.current_input = ""
+        st.success("✅ 대화 히스토리가 초기화되었습니다.")
+        st.rerun()
+
+    # 🔥 쿼리 실행 처리
+    if submit_button and user_input.strip():
+        with st.spinner("🤖 AI가 SQL 쿼리를 생성하고 실행 중입니다..."):
+            time.sleep(1)
             try:
-                # SQL 쿼리 생성 (AI 기반)
                 sql_query, is_ai_generated = (
                     st.session_state.sql_generator.generate_sql(user_input)
                 )
 
-                # AI 생성 여부 표시
-                if is_ai_generated:
-                    st.success("✅ Azure OpenAI GPT-4가 쿼리를 생성했습니다!")
-                else:
-                    st.info("ℹ️ 규칙 기반으로 쿼리를 생성했습니다.")
-
-                # 쿼리 실행
                 result_df, metadata = db_manager.execute_query(sql_query)
 
-                # 결과 표시
-                st.markdown(
-                    """
-                <div class="success-alert">
-                    ✅ Azure SQL Database에서 쿼리가 성공적으로 실행되었습니다!
-                </div>
-                """,
-                    unsafe_allow_html=True,
-                )
+                explanation = ""
+                if hasattr(st.session_state.sql_generator, "get_query_explanation"):
+                    explanation = st.session_state.sql_generator.get_query_explanation(
+                        sql_query
+                    )
 
-                # 실행 메타데이터 표시
-                col1, col2, col3 = st.columns(3)
-                with col1:
-                    st.metric("실행 시간", f"{metadata['execution_time']}초")
-                with col2:
-                    st.metric("결과 행수", f"{metadata['row_count']:,}행")
-                with col3:
-                    st.metric("AI 생성", "✅" if is_ai_generated else "❌")
+                conversation_item = {
+                    "user_input": user_input,
+                    "sql_query": sql_query,
+                    "result_df": (
+                        result_df.copy() if not result_df.empty else pd.DataFrame()
+                    ),
+                    "result_count": len(result_df) if not result_df.empty else 0,
+                    "execution_time": metadata["execution_time"],
+                    "is_ai_generated": is_ai_generated,
+                    "explanation": explanation,
+                    "timestamp": datetime.now().strftime("%Y-%m-%d %H:%M:%S"),
+                    "success": metadata["success"],
+                }
 
-                # 생성된 SQL 표시
-                with st.expander("🔍 생성된 SQL 쿼리 보기"):
+                st.session_state.conversation_history.append(conversation_item)
+
+                st.markdown("---")
+                st.markdown("### 🎯 실행 결과")
+
+                if metadata["success"]:
+                    if is_ai_generated:
+                        st.success("✅ Azure OpenAI GPT-4가 쿼리를 생성했습니다!")
+                    else:
+                        st.info("ℹ️ 규칙 기반으로 쿼리를 생성했습니다.")
+
+                    st.subheader("🔍 생성된 SQL 쿼리")
                     st.code(sql_query, language="sql")
 
-                    # 쿼리 설명 추가
-                    if hasattr(st.session_state.sql_generator, "get_query_explanation"):
-                        explanation = (
-                            st.session_state.sql_generator.get_query_explanation(
-                                sql_query
-                            )
-                        )
+                    if explanation:
                         st.info(f"📝 쿼리 설명: {explanation}")
 
-                # 결과 데이터 표시
-                if not result_df.empty:
-                    st.subheader("📋 쿼리 실행 결과")
-                    st.dataframe(result_df, use_container_width=True)
+                    col1, col2, col3 = st.columns(3)
+                    with col1:
+                        st.metric("실행 시간", f"{metadata['execution_time']:.3f}초")
+                    with col2:
+                        st.metric("결과 행수", f"{metadata['row_count']:,}행")
+                    with col3:
+                        st.metric("AI 생성", "✅" if is_ai_generated else "❌")
 
-                    # 결과 시각화
-                    create_result_visualization(result_df)
+                    if not result_df.empty:
+                        st.subheader("📋 쿼리 실행 결과")
+                        st.dataframe(result_df, use_container_width=True)
 
-                    # CSV 다운로드
-                    csv = result_df.to_csv(index=False, encoding="utf-8-sig")
-                    st.download_button(
-                        label="📥 결과 데이터 다운로드 (CSV)",
-                        data=csv,
-                        file_name=f"azure_query_result_{datetime.now().strftime('%Y%m%d_%H%M%S')}.csv",
-                        mime="text/csv",
-                    )
+                        try:
+                            create_result_visualization(result_df)
+                        except Exception as viz_error:
+                            st.warning(f"시각화 생성 중 오류: {viz_error}")
+
+                        csv = result_df.to_csv(index=False, encoding="utf-8-sig")
+                        st.download_button(
+                            label="📥 결과 데이터 다운로드 (CSV)",
+                            data=csv,
+                            file_name=f"query_result_{datetime.now().strftime('%Y%m%d_%H%M%S')}.csv",
+                            mime="text/csv",
+                            key=f"download_{len(st.session_state.conversation_history)}",
+                        )
+                    else:
+                        st.warning("⚠️ 쿼리 결과가 없습니다.")
+
                 else:
-                    st.warning("⚠️ 쿼리 결과가 없습니다.")
+                    st.error(
+                        f"❌ 쿼리 실행 실패: {metadata.get('error_message', '알 수 없는 오류')}"
+                    )
 
-                # 채팅 히스토리에 추가
-                st.session_state.chat_history.append(
-                    {
-                        "user": user_input,
-                        "sql": sql_query,
-                        "result_count": len(result_df) if not result_df.empty else 0,
-                        "execution_time": metadata["execution_time"],
-                        "is_ai_generated": is_ai_generated,
-                        "timestamp": datetime.now().strftime("%Y-%m-%d %H:%M:%S"),
-                    }
+                st.success(
+                    f"✅ 질문이 대화 히스토리에 추가되었습니다! (총 {len(st.session_state.conversation_history)}개)"
                 )
+
+                st.session_state.current_input = ""
 
             except Exception as e:
-                st.markdown(
-                    f"""
-                <div class="error-alert">
-                    ❌ 쿼리 실행 중 오류가 발생했습니다: {str(e)}
-                </div>
-                """,
-                    unsafe_allow_html=True,
-                )
+                st.error(f"❌ 쿼리 실행 중 오류가 발생했습니다: {str(e)}")
                 st.info("💡 다른 방식으로 질문해보시거나 예시 쿼리를 사용해보세요.")
 
-    # 채팅 히스토리 표시
-    if st.session_state.chat_history:
-        st.subheader("📝 최근 쿼리 히스토리")
-        with st.expander("히스토리 보기"):
-            for chat in reversed(st.session_state.chat_history[-5:]):
-                ai_badge = "🤖 AI" if chat.get("is_ai_generated", False) else "📏 규칙"
-                st.markdown(
-                    f"""
-                <div class="chat-container">
-                    <strong>🗣️ 질문:</strong> {chat['user']}<br>
-                    <strong>⏰ 시간:</strong> {chat['timestamp']}<br>
-                    <strong>📊 결과:</strong> {chat['result_count']}건<br>
-                    <strong>⚡ 실행시간:</strong> {chat.get('execution_time', 'N/A')}초<br>
-                    <strong>🎯 생성방식:</strong> {ai_badge}
-                </div>
-                """,
-                    unsafe_allow_html=True,
-                )
+    # 대화 히스토리 표시 (맨 아래)
+    if st.session_state.conversation_history:
+        st.markdown("---")
+        st.subheader("💬 대화 히스토리")
+
+        recent_conversations = st.session_state.conversation_history[-5:]
+
+        for i, conversation in enumerate(reversed(recent_conversations)):
+            actual_index = len(st.session_state.conversation_history) - i
+
+            with st.chat_message("user"):
+                st.write(f"**질문 {actual_index}:** {conversation['user_input']}")
+
+            with st.chat_message("assistant"):
+                col1, col2, col3 = st.columns([2, 1, 1])
+
+                with col1:
+                    st.write(f"**실행 결과:** {conversation['result_count']}건")
+                with col2:
+                    st.write(f"**실행시간:** {conversation['execution_time']:.3f}초")
+                with col3:
+                    ai_badge = (
+                        "🤖 AI"
+                        if conversation.get("is_ai_generated", False)
+                        else "📏 규칙"
+                    )
+                    st.write(f"**생성:** {ai_badge}")
+
+                with st.expander(f"🔍 생성된 SQL 쿼리 (질문 {actual_index})"):
+                    st.code(conversation["sql_query"], language="sql")
+
+                    if conversation.get("explanation"):
+                        st.info(f"📝 쿼리 설명: {conversation['explanation']}")
+
+                if not conversation["result_df"].empty:
+                    with st.expander(f"📋 실행 결과 데이터 (질문 {actual_index})"):
+                        st.dataframe(
+                            conversation["result_df"], use_container_width=True
+                        )
+
+                        csv = conversation["result_df"].to_csv(
+                            index=False, encoding="utf-8-sig"
+                        )
+                        st.download_button(
+                            label=f"📥 질문 {actual_index} 결과 다운로드",
+                            data=csv,
+                            file_name=f"history_result_{actual_index}_{datetime.now().strftime('%Y%m%d_%H%M%S')}.csv",
+                            mime="text/csv",
+                            key=f"download_history_{actual_index}",
+                        )
+
+        if len(st.session_state.conversation_history) > 5:
+            st.info(
+                f"최근 5개 대화만 표시됩니다. 전체 {len(st.session_state.conversation_history)}개 대화가 있습니다."
+            )
+
+        st.markdown("---")
+        st.subheader("📊 대화 세션 통계")
+
+        total_questions = len(st.session_state.conversation_history)
+        successful_queries = sum(
+            1 for conv in st.session_state.conversation_history if conv["success"]
+        )
+        ai_generated = sum(
+            1
+            for conv in st.session_state.conversation_history
+            if conv["is_ai_generated"]
+        )
+        total_results = sum(
+            conv["result_count"] for conv in st.session_state.conversation_history
+        )
+
+        col1, col2, col3, col4 = st.columns(4)
+
+        with col1:
+            st.metric("총 질문 수", f"{total_questions}개")
+        with col2:
+            st.metric("성공률", f"{(successful_queries/total_questions*100):.1f}%")
+        with col3:
+            st.metric("AI 생성률", f"{(ai_generated/total_questions*100):.1f}%")
+        with col4:
+            st.metric("총 결과 행수", f"{total_results:,}행")
 
 
 def create_result_visualization(df):
@@ -1547,10 +1596,10 @@ def display_sidebar(db_manager):
             """
         **자연어 쿼리 예시:**
         - "최근 3개월 포트인 현황"
-        - "COMM_CMPN_NM별 정산 내역"
+        - "사업자별 정산 내역"
         - "TEL_NO 조회"
-        - "월별 SETL_AMT 추이"
-        - "DEPAZ_AMT 합계 현황"
+        - "월별 정상금액 추이"
+        - "예치금 합계 현황"
         
         **💡 팁:**
         - 실제 컬럼명을 사용하면 더 정확합니다

@@ -113,7 +113,8 @@ class SQLGenerator:
         2. PY_NP_SBSC_RMNY_TXN은 포트인(가입) 데이터 - 일자: TRT_DATE  
         3. PY_DEPAZ_BAS는 예치금 데이터 - 일자: RMNY_DATE
         4. 전화번호는 PY_NP_SBSC_RMNY_TXN.TEL_NO 또는 PY_NP_TRMN_RMNY_TXN.TEL_NO에서 조회
-        5. 개인정보 보호: 휴대전화번호는 SUBSTR(TEL_NO, 1, 3) || '****' || SUBSTR(TEL_NO, -4) 형태로 마스킹
+        5. PY_DEPAZ_BAS 테이블에는 TEL_NO가 없어서 PY_NP_TRMN_RMNY_TXN 테이블에서 SVC_CONT_ID, RMNY_DATE와 조인
+        6. 개인정보 보호: 휴대전화번호는 LEFT(TEL_NO, 3) || '****' || RIGHT(TEL_NO, 4) 형태로 마스킹
         7. 날짜 필터링 시 최근 3개월을 기본으로 설정
         8. 집계 쿼리 시 적절한 GROUP BY와 ORDER BY 사용
         9. 금액은 SUM, AVG 등 집계함수 사용 시 ROUND 적용
@@ -529,8 +530,8 @@ class SQLGenerator:
         return f"""
         WITH operator_summary AS (
             SELECT 
-                COMM_CMPN_NM as operator_name,
                 'PORT_IN' as port_type,
+                BCHNG_COMM_CMPN_ID as operator_name
                 COUNT(*) as transaction_count,
                 SUM(SETL_AMT) as total_amount,
                 ROUND(AVG(CAST(SETL_AMT AS FLOAT)), 0) as avg_amount,
@@ -541,19 +542,17 @@ class SQLGenerator:
                 AND TRT_STUS_CD IN ('OK', 'WD')
                 {operator_filter}
             GROUP BY COMM_CMPN_NM
-            
             UNION ALL
-            
             SELECT 
-                COMM_CMPN_NM as operator_name,
                 'PORT_OUT' as port_type,
+                ACHNG_COMM_CMPN_ID as operator_name
                 COUNT(*) as transaction_count,
                 SUM(PAY_AMT) as total_amount,
                 ROUND(AVG(CAST(PAY_AMT AS FLOAT)), 0) as avg_amount,
                 MIN(PAY_AMT) as min_amount,
                 MAX(PAY_AMT) as max_amount
             FROM PY_NP_TRMN_RMNY_TXN
-            WHERE SETL_TRT_DATE >= {azure_date_filter}
+            WHERE NP_TRMN_DATE >= {azure_date_filter}
                 AND NP_TRMN_DTL_STTUS_VAL IN ('1', '3')
                 {operator_filter}
             GROUP BY COMM_CMPN_NM
@@ -591,20 +590,20 @@ class SQLGenerator:
 
         return f"""
         SELECT 
-            BILL_ACNT_ID as account_id,
+            BILL_ACC_ID,
             COUNT(*) as deposit_count,
             SUM(DEPAZ_AMT) as total_deposit,
             ROUND(AVG(CAST(DEPAZ_AMT AS FLOAT)), 0) as avg_deposit,
             MIN(DEPAZ_AMT) as min_deposit,
             MAX(DEPAZ_AMT) as max_deposit,
-            FORMAT(DPST_DT, 'yyyy-MM') as deposit_month,
+            FORMAT(RMNY_DATE, 'yyyy-MM') as deposit_month,
             DEPAZ_DIV_CD as deposit_type,
             RMNY_METH_CD as payment_method
         FROM PY_DEPAZ_BAS
-        WHERE DPST_DT >= {azure_date_filter}
+        WHERE RMNY_DATE >= {azure_date_filter}
             AND RMNY_METH_CD = 'NA'
             AND DEPAZ_DIV_CD = '10'
-        GROUP BY BILL_ACNT_ID, FORMAT(DPST_DT, 'yyyy-MM'), DEPAZ_DIV_CD, RMNY_METH_CD
+        GROUP BY BILL_ACC_ID, FORMAT(RMNY_DATE, 'yyyy-MM'), DEPAZ_DIV_CD, RMNY_METH_CD
         ORDER BY deposit_month DESC, total_deposit DESC
         """
 
@@ -613,32 +612,30 @@ class SQLGenerator:
         return f"""
         WITH monthly_stats AS (
             SELECT 
-                strftime('%Y-%m', TRT_DATE) as month,
-                BCHNG_COMM_CMPN_ID as operator_code,
                 'PORT_IN' as port_type,
+                FORMAT(TRT_DATE, 'yyyy-MM') as month,
+                BCHNG_COMM_CMPN_ID as operator_code,
                 COUNT(*) as monthly_count,
                 SUM(SETL_AMT) as monthly_amount
             FROM PY_NP_SBSC_RMNY_TXN 
             WHERE TRT_DATE >= {date_filter} AND NP_STTUS_CD IN ('OK', 'WD')
             GROUP BY strftime('%Y-%m', TRT_DATE), BCHNG_COMM_CMPN_ID
-            
             UNION ALL
-            
             SELECT 
-                strftime('%Y-%m', NP_TRMN_DATE) as month,
-                BCHNG_COMM_CMPN_ID as operator_code,
                 'PORT_OUT' as port_type,
+                FORMAT(NP_TRMN_DATE, 'yyyy-MM') as month,
+                ACHNG_COMM_CMPN_ID as operator_code,
                 COUNT(*) as monthly_count,
                 SUM(PAY_AMT) as monthly_amount
             FROM PY_NP_TRMN_RMNY_TXN 
             WHERE NP_TRMN_DATE >= {date_filter} AND NP_TRMN_DTL_STTUS_VAL IN ('1', '3')
-            GROUP BY strftime('%Y-%m', NP_TRMN_DATE), BCHNG_COMM_CMPN_ID
+            GROUP BY strftime('%Y-%m', NP_TRMN_DATE), ACHNG_COMM_CMPN_ID
         ),
         growth_analysis AS (
             SELECT 
+                port_type,
                 month,
                 operator_code,
-                port_type,
                 monthly_amount,
                 LAG(monthly_amount) OVER (
                     PARTITION BY operator_code, port_type 
@@ -693,9 +690,7 @@ class SQLGenerator:
                 MAX(SETL_AMT) as max_amount
             FROM PY_NP_SBSC_RMNY_TXN
             WHERE TRT_DATE >= {date_filter} AND NP_STTUS_CD IN ('OK', 'WD')
-            
             UNION ALL
-            
             SELECT 
                 'PORT_OUT' as port_type,
                 COUNT(*) as transaction_count,
@@ -730,7 +725,7 @@ class SQLGenerator:
             SUM(SETL_AMT) as 총금액,
             ROUND(AVG(SETL_AMT), 0) as 평균금액
         FROM PY_NP_SBSC_RMNY_TXN
-        WHERE TRT_DATE >= date('now', '-1 months') 
+        WHERE TRT_DATE >= DATEADD(month, -1, GETDATE())
             AND NP_STTUS_CD IN ('OK', 'WD')
         UNION ALL
         SELECT 
@@ -739,7 +734,7 @@ class SQLGenerator:
             SUM(PAY_AMT) as 총금액,
             ROUND(AVG(PAY_AMT), 0) as 평균금액
         FROM PY_NP_TRMN_RMNY_TXN
-        WHERE NP_TRMN_DATE >= date('now', '-1 months') 
+        WHERE NP_TRMN_DATE >= DATEADD(month, -1, GETDATE())
             AND NP_TRMN_DTL_STTUS_VAL IN ('1', '3')
         """
 
