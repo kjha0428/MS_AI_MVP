@@ -778,7 +778,7 @@ def generate_sql_query(user_input, is_azure=True, azure_config=None):
 
     # 2. 규칙 기반 쿼리 생성 (폴백)
     logger.info("규칙 기반 SQL 쿼리 생성 사용")
-    # return generate_rule_based_sql_query(user_input, is_azure)
+    return generate_rule_based_sql_query(user_input, is_azure)
 
 
 # SQL 쿼리 생성 함수 (수정된 버전)
@@ -1458,10 +1458,10 @@ def display_chatbot(db_manager):
                     st.markdown("### 🎯 실행 결과")
 
                     if metadata["success"]:
-                        # if is_ai_generated:
-                        #     st.success("✅ Azure OpenAI GPT-4가 쿼리를 생성했습니다!")
-                        # else:
-                        #     st.info("ℹ️ 규칙 기반으로 쿼리를 생성했습니다.")
+                        if is_ai_generated:
+                            st.success("✅ Azure OpenAI GPT-4가 쿼리를 생성했습니다!")
+                        else:
+                            st.info("ℹ️ 규칙 기반으로 쿼리를 생성했습니다.")
 
                         st.subheader("🔍 생성된 SQL 쿼리")
                         st.code(sql_query, language="sql")
