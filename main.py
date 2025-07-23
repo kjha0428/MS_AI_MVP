@@ -1291,6 +1291,8 @@ def display_chatbot(db_manager):
                 sql_query, is_ai_generated = (
                     st.session_state.sql_generator.generate_sql(user_input)
                 )
+                ## 로그 확인
+                st.logger(is_ai_generated)
 
                 result_df, metadata = db_manager.execute_query(sql_query)
 
@@ -1323,6 +1325,8 @@ def display_chatbot(db_manager):
                     if is_ai_generated:
                         st.success("✅ Azure OpenAI GPT-4가 쿼리를 생성했습니다!")
                     else:
+                        ## 로그 확인
+                        st.logger("metadata")
                         st.info("ℹ️ 규칙 기반으로 쿼리를 생성했습니다.")
 
                     st.subheader("🔍 생성된 SQL 쿼리")
