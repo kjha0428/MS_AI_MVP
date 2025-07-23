@@ -332,22 +332,28 @@ class SQLGenerator:
         import re
 
         if "최근 1개월" in user_input or "최근 한달" in user_input:
-            return "date('now', '-1 month')"
+            # return "date('now', '-1 month')"
+            return "DATEADD(month, -1, GETDATE())"
         elif "최근 3개월" in user_input:
-            return "date('now', '-3 months')"
+            # return "date('now', '-3 months')"
+            return "DATEADD(month, -3, GETDATE())"
         elif "최근 6개월" in user_input:
-            return "date('now', '-6 months')"
+            # return "date('now', '-6 months')"
+            return "DATEADD(month, -6, GETDATE())"
         elif "최근 1년" in user_input:
-            return "date('now', '-1 year')"
+            # return "date('now', '-1 year')"
+            return "DATEADD(year, -1, GETDATE())"
 
         # 숫자 + 개월 패턴 검색
         month_match = re.search(r"(\d+)개?월", user_input)
         if month_match:
             months = int(month_match.group(1))
-            return f"date('now', '-{months} months')"
+            # return f"date('now', '-{months} months')"
+            return f"DATEADD(year, -{months}, GETDATE())"
 
         # 기본값: 최근 3개월
-        return "date('now', '-3 months')"
+        # return "date('now', '-3 months')"
+        return "DATEADD(month, -3, GETDATE())"
 
     def _is_monthly_trend_query(self, user_input: str) -> bool:
         """월별 추이 쿼리 여부 판단"""

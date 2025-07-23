@@ -791,18 +791,50 @@ def generate_rule_based_sql_query(user_input, is_azure=True):
     date_func = {
         "now_minus_months": lambda months: (
             f"DATEADD(month, -{months}, GETDATE())"
-            if is_azure
-            else f"date('now', '-{months} months')"
+            #if is_azure
+            #else f"date('now', '-{months} months')"
         ),
         "format_month": lambda col: (
-            f"FORMAT({col}, 'yyyy-MM')" if is_azure else f"strftime('%Y-%m', {col})"
+            f"FORMAT({col}, 'yyyy-MM')" #if is_azure else f"strftime('%Y-%m', {col})"
         ),
         "substr_phone": lambda col: (
             f"LEFT({col}, 3) + '****' + RIGHT({col}, 4)"
-            if is_azure
-            else f"SUBSTR({col}, 1, 3) || '****' || SUBSTR({col}, -4)"
+            #if is_azure
+            #else f"SUBSTR({col}, 1, 3) || '****' || SUBSTR({col}, -4)"
         ),
     }
+
+    # 1. 월별 집계 쿼리
+    # if "월별" in user_input_lower or "추이" in user_input_lower:
+    #     if "포트인" in user_input_lower:
+    #         return f"""
+    #         SELECT 
+    #             {date_func['format_month']('TRT_DATE')} as 번호이동월,
+    #             BCHNG_COMM_CMPN_ID as 전사업자,
+    #             COUNT(*) as 총건수,
+    #             SUM(SETL_AMT) as 총금액,
+    #             {'ROUND(AVG(SETL_AMT), 0)' if not is_azure else 'CAST(AVG(SETL_AMT) AS INT)'} as 정산금액평균
+    #         FROM PY_NP_SBSC_RMNY_TXN 
+    #         WHERE TRT_DATE >= {date_func['now_minus_months'](6)}
+    #             AND NP_STTUS_CD IN ('OK', 'WD')
+    #         GROUP BY {date_func['format_month']('TRT_DATE')}, BCHNG_COMM_CMPN_ID
+    #         ORDER BY 번호이동월 DESC, 총금액 DESC
+    #         """
+    #     elif "포트아웃" in user_input_lower:
+    #         return f"""
+    #         SELECT 
+    #             {date_func['format_month']('NP_TRMN_DATE')} as 번호이동월,
+    #             BCHNG_COMM_CMPN_ID as 전사업자,
+    #             COUNT(*) as 총건수,
+    #             SUM(PAY_AMT) as 총금액,
+    #             {'ROUND(AVG(PAY_AMT), 0)' if not is_azure else 'CAST(AVG(PAY_AMT) AS INT)'} as 정산금액평균
+    #         FROM PY_NP_TRMN_RMNY_TXN 
+    #         WHERE NP_TRMN_DATE IS NOT NULL 
+    #             AND NP_TRMN_DATE >= {date_func['now_minus_months'](4)}
+    #             AND NP_TRMN_DTL_STTUS_VAL IN ('1', '3')
+    #         GROUP BY {date_func['format_month']('NP_TRMN_DATE')}, BCHNG_COMM_CMPN_ID
+    #         ORDER BY 번호이동월 DESC, 총금액 DESC
+    #         """
 
     # 1. 월별 집계 쿼리
     if "월별" in user_input_lower or "추이" in user_input_lower:
@@ -813,7 +845,7 @@ def generate_rule_based_sql_query(user_input, is_azure=True):
                 BCHNG_COMM_CMPN_ID as 전사업자,
                 COUNT(*) as 총건수,
                 SUM(SETL_AMT) as 총금액,
-                {'ROUND(AVG(SETL_AMT), 0)' if not is_azure else 'CAST(AVG(SETL_AMT) AS INT)'} as 정산금액평균
+                CAST(AVG(SETL_AMT) AS INT) as 정산금액평균
             FROM PY_NP_SBSC_RMNY_TXN 
             WHERE TRT_DATE >= {date_func['now_minus_months'](6)}
                 AND NP_STTUS_CD IN ('OK', 'WD')
@@ -827,7 +859,7 @@ def generate_rule_based_sql_query(user_input, is_azure=True):
                 BCHNG_COMM_CMPN_ID as 전사업자,
                 COUNT(*) as 총건수,
                 SUM(PAY_AMT) as 총금액,
-                {'ROUND(AVG(PAY_AMT), 0)' if not is_azure else 'CAST(AVG(PAY_AMT) AS INT)'} as 정산금액평균
+                CAST(AVG(PAY_AMT) AS INT) as 정산금액평균
             FROM PY_NP_TRMN_RMNY_TXN 
             WHERE NP_TRMN_DATE IS NOT NULL 
                 AND NP_TRMN_DATE >= {date_func['now_minus_months'](4)}
@@ -886,6 +918,37 @@ def generate_rule_based_sql_query(user_input, is_azure=True):
                 "AND (BCHNG_COMM_CMPN_ID = 'LGU+' OR ACHNG_COMM_CMPN_ID = 'LGU+')"
             )
 
+        # return f"""
+        # SELECT 
+        #     BCHNG_COMM_CMPN_ID as 사업자,
+        #     'PORT_IN' as 번호이동타입,
+        #     COUNT(*) as 번호이동건수,
+        #     SUM(SETL_AMT) as 총정산금액,
+        #     {'ROUND(AVG(SETL_AMT), 0)' if not is_azure else 'CAST(AVG(SETL_AMT) AS INT)'} as 정산금액평균,
+        #     {'MIN(TRT_DATE)' if not is_azure else 'MIN(CAST(TRT_DATE AS DATE))'} as 최초일자,
+        #     {'MAX(TRT_DATE)' if not is_azure else 'MAX(CAST(TRT_DATE AS DATE))'} as 최신일자
+        # FROM PY_NP_SBSC_RMNY_TXN
+        # WHERE TRT_DATE >= {date_func['now_minus_months'](3)}
+        #     AND NP_STTUS_CD IN ('OK', 'WD')
+        #     {operator_filter}
+        # GROUP BY BCHNG_COMM_CMPN_ID
+        # UNION ALL
+        # SELECT 
+        #     BCHNG_COMM_CMPN_ID as 사업자,
+        #     'PORT_OUT' as 번호이동타입,
+        #     COUNT(*) as 번호이동건수,
+        #     SUM(PAY_AMT) as 총정산금액,
+        #     {'ROUND(AVG(PAY_AMT), 0)' if not is_azure else 'CAST(AVG(PAY_AMT) AS INT)'} as 정산금액평균,
+        #     {'MIN(NP_TRMN_DATE)' if not is_azure else 'MIN(CAST(NP_TRMN_DATE AS DATE))'} as 최초일자,
+        #     {'MAX(NP_TRMN_DATE)' if not is_azure else 'MAX(CAST(NP_TRMN_DATE AS DATE))'} as 최신일자
+        # FROM PY_NP_TRMN_RMNY_TXN
+        # WHERE NP_TRMN_DATE IS NOT NULL 
+        #     AND NP_TRMN_DATE >= {date_func['now_minus_months'](3)}
+        #     AND NP_TRMN_DTL_STTUS_VAL IN ('1', '3')
+        #     {operator_filter}
+        # GROUP BY BCHNG_COMM_CMPN_ID
+        # ORDER BY 사업자, 번호이동타입
+        # """
         return f"""
         SELECT 
             BCHNG_COMM_CMPN_ID as 사업자,
@@ -893,8 +956,8 @@ def generate_rule_based_sql_query(user_input, is_azure=True):
             COUNT(*) as 번호이동건수,
             SUM(SETL_AMT) as 총정산금액,
             {'ROUND(AVG(SETL_AMT), 0)' if not is_azure else 'CAST(AVG(SETL_AMT) AS INT)'} as 정산금액평균,
-            {'MIN(TRT_DATE)' if not is_azure else 'MIN(CAST(TRT_DATE AS DATE))'} as 최초일자,
-            {'MAX(TRT_DATE)' if not is_azure else 'MAX(CAST(TRT_DATE AS DATE))'} as 최신일자
+            MIN(CAST(TRT_DATE AS DATE)) as 최초일자,
+            MAX(CAST(TRT_DATE AS DATE)) as 최신일자
         FROM PY_NP_SBSC_RMNY_TXN
         WHERE TRT_DATE >= {date_func['now_minus_months'](3)}
             AND NP_STTUS_CD IN ('OK', 'WD')
@@ -906,9 +969,9 @@ def generate_rule_based_sql_query(user_input, is_azure=True):
             'PORT_OUT' as 번호이동타입,
             COUNT(*) as 번호이동건수,
             SUM(PAY_AMT) as 총정산금액,
-            {'ROUND(AVG(PAY_AMT), 0)' if not is_azure else 'CAST(AVG(PAY_AMT) AS INT)'} as 정산금액평균,
-            {'MIN(NP_TRMN_DATE)' if not is_azure else 'MIN(CAST(NP_TRMN_DATE AS DATE))'} as 최초일자,
-            {'MAX(NP_TRMN_DATE)' if not is_azure else 'MAX(CAST(NP_TRMN_DATE AS DATE))'} as 최신일자
+            CAST(AVG(PAY_AMT) AS INT)' as 정산금액평균,
+            MIN(CAST(NP_TRMN_DATE AS DATE))' as 최초일자,
+            MAX(CAST(NP_TRMN_DATE AS DATE))' as 최신일자
         FROM PY_NP_TRMN_RMNY_TXN
         WHERE NP_TRMN_DATE IS NOT NULL 
             AND NP_TRMN_DATE >= {date_func['now_minus_months'](3)}
@@ -918,14 +981,33 @@ def generate_rule_based_sql_query(user_input, is_azure=True):
         ORDER BY 사업자, 번호이동타입
         """
 
-    # 4. 예치금 조회
+    # # 4. 예치금 조회
+    # if "예치금" in user_input_lower:
+    #     return f"""
+    #     SELECT 
+    #         {date_func['format_month']('RMNY_DATE')} as 수납월,
+    #         COUNT(*) as 총건수,
+    #         SUM(DEPAZ_AMT) as 총금액,
+    #         {'ROUND(AVG(DEPAZ_AMT), 0)' if not is_azure else 'CAST(AVG(DEPAZ_AMT) AS INT)'} as 평균금액,
+    #         MIN(DEPAZ_AMT) as 최소금액,
+    #         MAX(DEPAZ_AMT) as 최대금액,
+    #         DEPAZ_DIV_CD as 예치금구분,
+    #         RMNY_METH_CD as 수납방법
+    #     FROM PY_DEPAZ_BAS
+    #     WHERE RMNY_DATE >= {date_func['now_minus_months'](3)}
+    #         AND DEPAZ_DIV_CD = '10'
+    #         AND RMNY_METH_CD = 'NA'
+    #     GROUP BY {date_func['format_month']('RMNY_DATE')}, DEPAZ_DIV_CD, RMNY_METH_CD
+    #     ORDER BY 수납월 DESC
+    #     """
+        # 4. 예치금 조회
     if "예치금" in user_input_lower:
         return f"""
         SELECT 
             {date_func['format_month']('RMNY_DATE')} as 수납월,
             COUNT(*) as 총건수,
             SUM(DEPAZ_AMT) as 총금액,
-            {'ROUND(AVG(DEPAZ_AMT), 0)' if not is_azure else 'CAST(AVG(DEPAZ_AMT) AS INT)'} as 평균금액,
+            CAST(AVG(DEPAZ_AMT) AS INT) as 평균금액,
             MIN(DEPAZ_AMT) as 최소금액,
             MAX(DEPAZ_AMT) as 최대금액,
             DEPAZ_DIV_CD as 예치금구분,

@@ -805,24 +805,24 @@ def test_database_manager():
 
                 # 쿼리 실행 테스트
                 print("\n🔍 Azure 쿼리 실행 테스트:")
-                if azure_manager.use_sample_data:
-                    test_query = """
-                    SELECT TOP 1
-                        COUNT(*) as total_count,
-                        SUM(SETL_AMT) as total_amount
-                    FROM PY_NP_SBSC_RMNY_TXN
-                    WHERE TRT_DATE >= DATEADD(month, -1, GETDATE())
-                        AND NP_STTUS_CD IN ('OK', 'WD')
-                    """
-                else:
-                    test_query = """
-                    SELECT 
-                        COUNT(*) as total_count,
-                        SUM(SETL_AMT) as total_amount
-                    FROM PY_NP_SBSC_RMNY_TXN
-                    WHERE TRT_DATE >= date('now', '-1 months')
-                        AND NP_STTUS_CD IN ('OK', 'WD')
-                    """
+                # if azure_manager.use_sample_data:
+                test_query = """
+                SELECT TOP 1
+                    COUNT(*) as total_count,
+                    SUM(SETL_AMT) as total_amount
+                FROM PY_NP_SBSC_RMNY_TXN
+                WHERE TRT_DATE >= DATEADD(month, -1, GETDATE())
+                    AND NP_STTUS_CD IN ('OK', 'WD')
+                """
+                # else:
+                #     test_query = """
+                #     SELECT 
+                #         COUNT(*) as total_count,
+                #         SUM(SETL_AMT) as total_amount
+                #     FROM PY_NP_SBSC_RMNY_TXN
+                #     WHERE TRT_DATE >= date('now', '-1 months')
+                #         AND NP_STTUS_CD IN ('OK', 'WD')
+                #     """
 
                 df, metadata = azure_manager.execute_query(test_query)
                 print(f"   실행 시간: {metadata['execution_time']}초")
