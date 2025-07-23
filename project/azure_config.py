@@ -148,7 +148,14 @@ class AzureConfig:
     def test_database_connection(self) -> bool:
         """SQLAlchemy를 사용한 Azure SQL Database 연결 테스트"""
         try:
-            from sqlalchemy import create_engine, text
+            # 🔥 수정: SQLAlchemy import 체크 추가
+            try:
+                from sqlalchemy import create_engine, text
+            except ImportError:
+                self.logger.error(
+                    "SQLAlchemy가 설치되지 않았습니다: pip install sqlalchemy"
+                )
+                return False
 
             connection_url = self.get_database_connection_string()
             if not connection_url:
@@ -181,20 +188,31 @@ class AzureConfig:
             "errors": [],
         }
 
-        # OpenAI 부분은 동일...
+        # 🔥 수정: OpenAI 연결 테스트
+        try:
+            if self.openai_api_key and self.openai_endpoint:
+                client = self.get_openai_client()
+                if client:
+                    results["openai"] = True
+                else:
+                    results["errors"].append("OpenAI 클라이언트 생성 실패")
+            else:
+                results["errors"].append("OpenAI 설정이 완전하지 않음")
+        except Exception as e:
+            results["errors"].append(f"OpenAI 연결 테스트 실패: {str(e)}")
 
         # 🔥 수정: Database 연결 테스트 부분
-        connection_url = self.get_database_connection_string()
-        if connection_url:
-            try:
+        try:
+            connection_url = self.get_database_connection_string()
+            if connection_url:
                 if self.test_database_connection():
                     results["database"] = True
                 else:
                     results["errors"].append("데이터베이스 연결 실패")
-            except Exception as e:
-                results["errors"].append(f"데이터베이스 연결 테스트 실패: {str(e)}")
-        else:
-            results["errors"].append("데이터베이스 연결 정보가 설정되지 않음")
+            else:
+                results["errors"].append("데이터베이스 연결 정보가 설정되지 않음")
+        except Exception as e:
+            results["errors"].append(f"데이터베이스 연결 테스트 실패: {str(e)}")
 
         return results
 

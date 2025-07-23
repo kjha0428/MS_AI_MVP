@@ -15,7 +15,7 @@ from sample_data import SampleDataManager
 class DatabaseManager:
     """데이터베이스 연결 및 쿼리 실행 관리 클래스"""
 
-    def __init__(self, azure_config: AzureConfig, use_sample_data: bool = False):
+    def __init__(self, azure_config: AzureConfig, use_sample_data=False):
         """
         데이터베이스 매니저 초기화
 
@@ -30,6 +30,7 @@ class DatabaseManager:
         # 연결 설정
         self.connection_string = None
         self.sample_connection = None
+        self.sqlalchemy_engine = None  # 🔥 추가: SQLAlchemy 엔진 추가
 
         # 성능 설정
         self.max_execution_time = 30
@@ -149,9 +150,13 @@ class DatabaseManager:
     def _initialize_azure_connection(self):
         """Azure SQL Database 연결 초기화"""
         try:
+            # 🔥 수정: azure_config에서 직접 연결 문자열 가져오기
             self.connection_string = self.azure_config.get_database_connection_string()
             if not self.connection_string:
                 raise ValueError("데이터베이스 연결 문자열을 가져올 수 없습니다")
+
+            # 🔥 수정: SQLAlchemy 엔진 생성
+            self._create_sqlalchemy_engine()
 
             # 연결 테스트
             if self.test_connection():
@@ -164,28 +169,20 @@ class DatabaseManager:
             raise e
 
     def _create_sqlalchemy_engine(self):
-        """pymssql용 SQLAlchemy 엔진 생성"""
+        """SQLAlchemy 엔진 생성 - connection_string 직접 사용"""
         try:
-            params = self.connection_params
-            server = params["server"]
-            database = params["database"]
-            user = quote_plus(params["user"])
-            password = quote_plus(params["password"])
-            port = params.get("port", 1433)
+            if not self.connection_string:
+                raise ValueError("연결 문자열이 없습니다")
 
-            # pymssql 연결 URL
-            connection_url = (
-                f"mssql+pymssql://{user}:{password}@{server}:{port}/{database}"
-            )
-
+            # 🔥 수정: 이미 완성된 connection_string을 직접 사용
             self.sqlalchemy_engine = create_engine(
-                connection_url, pool_timeout=20, pool_recycle=3600, echo=False
+                self.connection_string, pool_timeout=20, pool_recycle=3600, echo=False
             )
 
-            self.logger.info("pymssql SQLAlchemy 엔진 생성 성공")
+            self.logger.info("SQLAlchemy 엔진 생성 성공")
 
         except Exception as e:
-            self.logger.error(f"pymssql SQLAlchemy 엔진 생성 실패: {e}")
+            self.logger.error(f"SQLAlchemy 엔진 생성 실패: {e}")
             raise e
 
     @contextmanager
@@ -197,15 +194,13 @@ class DatabaseManager:
                 raise Exception("샘플 데이터베이스가 초기화되지 않았습니다")
             yield self.sample_connection
         else:
-            # Azure SQL 연결
-            if not self.connection_string:
-                raise Exception("Azure 연결 문자열이 없습니다")
+            # 🔥 수정: SQLAlchemy 엔진 사용
+            if not self.sqlalchemy_engine:
+                raise Exception("SQLAlchemy 엔진이 없습니다")
 
             conn = None
             try:
-                conn = pyodbc.connect(
-                    self.connection_string, timeout=self.max_execution_time
-                )
+                conn = self.sqlalchemy_engine.connect()
                 yield conn
             except Exception as e:
                 self.logger.error(f"Azure 연결 오류: {e}")
@@ -217,16 +212,7 @@ class DatabaseManager:
     def execute_query(
         self, sql_query: str, params: Optional[Dict] = None
     ) -> Tuple[pd.DataFrame, Dict[str, Any]]:
-        """
-        SQL 쿼리 실행
-
-        Args:
-            sql_query: 실행할 SQL 쿼리
-            params: 쿼리 파라미터 (선택사항)
-
-        Returns:
-            Tuple[pd.DataFrame, Dict]: (결과 데이터프레임, 실행 메타데이터)
-        """
+        """SQL 쿼리 실행"""
         start_time = time.time()
         metadata = {
             "execution_time": 0,
@@ -235,7 +221,7 @@ class DatabaseManager:
             "query_hash": hash(sql_query),
             "success": False,
             "error_message": None,
-            "database_type": "Azure SQL" if self.use_sample_data else "SQLite",
+            "database_type": "Azure SQL" if not self.use_sample_data else "SQLite",
             "query_preview": (
                 sql_query[:100] + "..." if len(sql_query) > 100 else sql_query
             ),
@@ -252,36 +238,39 @@ class DatabaseManager:
                 with self.get_connection() as conn:
                     df = pd.read_sql_query(sql_query, conn, params=params)
             else:
-                # 🔥 SQLAlchemy 엔진 직접 사용
+                # 🔥 수정: SQLAlchemy 엔진 존재 확인
+                if not self.sqlalchemy_engine:
+                    raise Exception("SQLAlchemy 엔진이 초기화되지 않았습니다")
+
                 df = pd.read_sql_query(sql_query, self.sqlalchemy_engine, params=params)
 
-                # 결과 크기 제한
-                if len(df) > self.max_result_rows:
-                    self.logger.warning(
-                        f"결과가 최대 행 수({self.max_result_rows})를 초과하여 잘렸습니다"
-                    )
-                    df = df.head(self.max_result_rows)
-                    metadata["truncated"] = True
-
-                # 메타데이터 업데이트
-                execution_time = time.time() - start_time
-                metadata.update(
-                    {
-                        "execution_time": round(execution_time, 3),
-                        "row_count": len(df),
-                        "column_count": len(df.columns),
-                        "success": True,
-                        "data_size_mb": round(
-                            df.memory_usage(deep=True).sum() / 1024 / 1024, 2
-                        ),
-                    }
+            # 결과 크기 제한
+            if len(df) > self.max_result_rows:
+                self.logger.warning(
+                    f"결과가 최대 행 수({self.max_result_rows})를 초과하여 잘렸습니다"
                 )
+                df = df.head(self.max_result_rows)
+                metadata["truncated"] = True
 
-                self.logger.info(
-                    f"쿼리 실행 성공: {metadata['row_count']}행, {execution_time:.3f}초, DB: {metadata['database_type']}"
-                )
+            # 메타데이터 업데이트
+            execution_time = time.time() - start_time
+            metadata.update(
+                {
+                    "execution_time": round(execution_time, 3),
+                    "row_count": len(df),
+                    "column_count": len(df.columns),
+                    "success": True,
+                    "data_size_mb": round(
+                        df.memory_usage(deep=True).sum() / 1024 / 1024, 2
+                    ),
+                }
+            )
 
-                return df, metadata
+            self.logger.info(
+                f"쿼리 실행 성공: {metadata['row_count']}행, {execution_time:.3f}초, DB: {metadata['database_type']}"
+            )
+
+            return df, metadata
 
         except Exception as e:
             execution_time = time.time() - start_time
@@ -356,13 +345,23 @@ class DatabaseManager:
     def test_connection(self) -> bool:
         """데이터베이스 연결 테스트"""
         try:
-            test_query = "SELECT 1 as test_value"
+            if self.use_sample_data:
+                test_query = "SELECT 1 as test_value"
 
-            with self.get_connection() as conn:
-                cursor = conn.cursor()
-                cursor.execute(test_query)
-                result = cursor.fetchone()
-                return result is not None
+                with self.get_connection() as conn:
+                    cursor = conn.cursor()
+                    cursor.execute(test_query)
+                    result = cursor.fetchone()
+                    return result is not None
+            else:
+                # 🔥 수정: SQLAlchemy 엔진으로 테스트
+                if not self.sqlalchemy_engine:
+                    return False
+
+                with self.sqlalchemy_engine.connect() as conn:
+                    result = conn.execute(test_query)
+                    row = result.fetchone()
+                    return row is not None
 
         except Exception as e:
             self.logger.error(f"연결 테스트 실패: {e}")
@@ -374,6 +373,10 @@ class DatabaseManager:
             if self.use_sample_data and self.sample_connection:
                 self.sample_connection.close()
                 self.logger.info("샘플 데이터베이스 연결 종료")
+
+            if self.sqlalchemy_engine:
+                self.sqlalchemy_engine.dispose()
+                self.logger.info("SQLAlchemy 엔진 정리 완료")
 
         except Exception as e:
             self.logger.error(f"연결 정리 중 오류: {e}")
@@ -585,18 +588,18 @@ class DatabaseManager:
         """Azure 모드 사용 여부 반환"""
         return self.use_sample_data
 
-    def get_connection_info(self) -> Dict[str, Any]:
-        """연결 정보 반환"""
-        return {
-            "type": self.get_database_type(),
-            "azure_ready": (
-                self.azure_config.is_production_ready() if self.azure_config else False
-            ),
-            "use_sample_data": self.use_sample_data,
-            "use_sample_data": self.use_sample_data,
-            "connection_string_available": bool(self.connection_string),
-            "sample_manager_available": bool(self.sample_manager),
-        }
+
+def get_connection_info(self) -> Dict[str, Any]:
+    """연결 정보 반환"""
+    return {
+        "type": self.get_database_type(),
+        "azure_ready": (
+            self.azure_config.is_production_ready() if self.azure_config else False
+        ),
+        "use_sample_data": self.use_sample_data,
+        "connection_string_available": bool(self.connection_string),
+        "sqlalchemy_engine_available": bool(self.sqlalchemy_engine),  # 🔥 수정
+    }
 
 
 # 데이터베이스 매니저 팩토리
@@ -631,10 +634,15 @@ class DatabaseManagerFactory:
         # 2. Azure 우선 시도
         logger.info("☁️ Azure 클라우드 연결 시도...")
         try:
-            # Azure 서비스 상태 먼저 확인
+            # 🔥 수정: Azure 서비스 상태 먼저 확인
             connection_status = azure_config.test_connection()
 
-            if not connection_status["database"]:
+            # 🔥 수정: connection_status가 dict인지 확인하고 안전하게 접근
+            if not isinstance(connection_status, dict):
+                logger.warning("Azure 연결 상태 확인 실패 - 샘플 모드로 전환")
+                return DatabaseManager(azure_config, use_sample_data=True)
+
+            if not connection_status.get("database", False):
                 logger.warning("Azure 데이터베이스 설정 불완전 - 샘플 모드로 전환")
                 return DatabaseManager(azure_config, use_sample_data=True)
 
