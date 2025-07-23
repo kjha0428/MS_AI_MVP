@@ -151,20 +151,20 @@ class SQLGenerator:
                 except Exception as ai_error:
                     self.logger.error(f"AI SQL 생성 중 오류: {ai_error}")
 
-            # 2. 규칙 기반 쿼리 생성 (백업)
-            try:
-                rule_sql = self._generate_rule_based_sql(user_input)
+            # # 2. 규칙 기반 쿼리 생성 (백업)
+            # try:
+            #     rule_sql = self._generate_rule_based_sql(user_input)
 
-                if self._validate_sql(rule_sql):
-                    self.logger.info("규칙 기반 SQL 쿼리 생성 성공")
-                    return rule_sql, False
-                else:
-                    self.logger.warning("규칙 기반 쿼리 검증 실패, 기본 쿼리 사용")
-            except Exception as rule_error:
-                self.logger.error(f"규칙 기반 SQL 생성 중 오류: {rule_error}")
+            #     if self._validate_sql(rule_sql):
+            #         self.logger.info("규칙 기반 SQL 쿼리 생성 성공")
+            #         return rule_sql, False
+            #     else:
+            #         self.logger.warning("규칙 기반 쿼리 검증 실패, 기본 쿼리 사용")
+            # except Exception as rule_error:
+            #     self.logger.error(f"규칙 기반 SQL 생성 중 오류: {rule_error}")
 
-            # 3. 최종 백업: 기본 쿼리
-            return self._get_default_query(), False
+            # # 3. 최종 백업: 기본 쿼리
+            # return self._get_default_query(), False
 
         except Exception as e:
             self.logger.error(f"전체 SQL 생성 실패: {e}")

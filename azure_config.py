@@ -83,21 +83,22 @@ class AzureConfig:
                     raise Exception("클라이언트 객체가 올바르지 않습니다")
 
             except TypeError as te:
-                # 구버전 방식으로 재시도
-                self.logger.warning(f"최신 방식 실패, 구버전 방식으로 재시도: {te}")
-                try:
-                    # 구버전 openai 라이브러리 방식
-                    openai.api_type = "azure"
-                    openai.api_key = self.openai_api_key
-                    openai.api_base = self.openai_endpoint
-                    openai.api_version = self.openai_api_version
+                # # 구버전 방식으로 재시도
+                # self.logger.warning(f"최신 방식 실패, 구버전 방식으로 재시도: {te}")
+                # try:
+                #     # 구버전 openai 라이브러리 방식
+                #     openai.api_type = "azure"
+                #     openai.api_key = self.openai_api_key
+                #     openai.api_base = self.openai_endpoint
+                #     openai.api_version = self.openai_api_version
 
-                    self.logger.info("Azure OpenAI 클라이언트 설정 완료 (구버전 방식)")
-                    return openai  # 구버전에서는 openai 모듈 자체를 반환
+                #     self.logger.info("Azure OpenAI 클라이언트 설정 완료 (구버전 방식)")
+                #     return openai  # 구버전에서는 openai 모듈 자체를 반환
 
-                except Exception as legacy_error:
-                    self.logger.error(f"구버전 방식도 실패: {legacy_error}")
-                    return None
+                # except Exception as legacy_error:
+                #     self.logger.error(f"구버전 방식도 실패: {legacy_error}")
+                #     return None
+                self.logger.error(te)
 
         except Exception as e:
             self.logger.error(f"Azure OpenAI 클라이언트 생성 실패: {e}")
