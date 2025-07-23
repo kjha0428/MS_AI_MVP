@@ -616,7 +616,7 @@ def get_dashboard_data(_db_manager):
         return pd.DataFrame(), pd.DataFrame()
 
 
-def generate_sql_with_openai(user_input, azure_config, is_azure=False):
+def generate_sql_with_openai(user_input, azure_config, is_azure=True):
     """OpenAI를 사용하여 SQL 쿼리 생성"""
 
     try:
@@ -697,7 +697,7 @@ def generate_sql_with_openai(user_input, azure_config, is_azure=False):
         raise e
 
 
-def get_database_schema_info(azure_config, is_azure=False):
+def get_database_schema_info(azure_config, is_azure=True):
     """데이터베이스 스키마 정보 반환"""
 
     # schema = {
@@ -751,7 +751,7 @@ def get_database_schema_info(azure_config, is_azure=False):
     return json.dumps(schema, ensure_ascii=False, indent=2)
 
 
-def generate_sql_query(user_input, is_azure=False, azure_config=None):
+def generate_sql_query(user_input, is_azure=True, azure_config=None):
     """사용자 입력을 SQL 쿼리로 변환 (OpenAI 우선, 규칙 기반 폴백)"""
 
     # 1. OpenAI 사용 시도 (우선순위)
@@ -782,7 +782,7 @@ def generate_sql_query(user_input, is_azure=False, azure_config=None):
 
 
 # SQL 쿼리 생성 함수 (수정된 버전)
-def generate_rule_based_sql_query(user_input, is_azure=False):
+def generate_rule_based_sql_query(user_input, is_azure=True):
     """사용자 입력을 SQL 쿼리로 변환 (Azure SQL/SQLite 호환)"""
 
     user_input_lower = user_input.lower()
