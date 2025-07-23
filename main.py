@@ -1459,10 +1459,10 @@ def display_chatbot(db_manager):
                     st.markdown("### 🎯 실행 결과")
 
                     if metadata["success"]:
-                        if is_ai_generated:
-                            st.success("✅ Azure OpenAI GPT-4가 쿼리를 생성했습니다!")
-                        else:
-                            st.info("ℹ️ 규칙 기반으로 쿼리를 생성했습니다.")
+                        # if is_ai_generated:
+                        #     st.success("✅ Azure OpenAI GPT-4가 쿼리를 생성했습니다!")
+                        # else:
+                        #     st.info("ℹ️ 규칙 기반으로 쿼리를 생성했습니다.")
 
                         st.subheader("🔍 생성된 SQL 쿼리")
                         st.code(sql_query, language="sql")
