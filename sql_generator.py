@@ -46,8 +46,8 @@ class SQLGenerator:
             self.logger.error("웹앱에서 AI 기반 쿼리 생성이 불가능합니다!")
         
         # 🔥 추가: 데이터베이스 타입 감지
-        self.is_azure_sql = self._detect_database_type()
-        self.logger.info(f"감지된 DB 타입: {'Azure SQL' if self.is_azure_sql else 'SQLite'}")
+        # self.is_azure_sql = self._detect_database_type()
+        # self.logger.info(f"감지된 DB 타입: {'Azure SQL' if self.is_azure_sql else 'SQLite'}")
 
         # 데이터베이스 스키마 정보
         self.db_schema = self._load_schema()
