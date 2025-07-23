@@ -6,14 +6,23 @@ import logging
 # import pyodbc
 import pymssql
 from urllib.parse import quote_plus
+from dotenv import load_dotenv
 
 
 class AzureConfig:
-    """환경변수 기반 Azure 설정 클래스 (Key Vault, 서비스 주체 없음)"""
+    """환경변수 기반 Azure 설정 클래스"""
 
     def __init__(self):
         """Azure 설정 초기화"""
         # Azure OpenAI 설정 (환경변수에서 직접 로드)
+        try:
+            load_dotenv(override=True)  # 기존 환경변수 덮어쓰기
+            self.logger = logging.getLogger(__name__)
+            self.logger.info("환경변수 파일 로드 완료")
+        except Exception as e:
+            self.logger = logging.getLogger(__name__)
+            self.logger.warning(f".env 파일 로드 실패: {e}")
+
         self.openai_api_key = os.getenv("AZURE_OPENAI_API_KEY")
         self.openai_endpoint = os.getenv("AZURE_OPENAI_ENDPOINT")
         self.openai_api_version = os.getenv("AZURE_OPENAI_API_VERSION")
