@@ -345,9 +345,11 @@ class DatabaseManager:
     def test_connection(self) -> bool:
         """데이터베이스 연결 테스트"""
         try:
-            if self.use_sample_data:
-                test_query = "SELECT 1 as test_value"
+            # 🔥 수정: test_query를 함수 시작 부분에 정의
+            test_query = "SELECT 1 as test_value"
 
+            if self.use_sample_data:
+                # SQLite 테스트
                 with self.get_connection() as conn:
                     cursor = conn.cursor()
                     cursor.execute(test_query)
@@ -356,10 +358,14 @@ class DatabaseManager:
             else:
                 # 🔥 수정: SQLAlchemy 엔진으로 테스트
                 if not self.sqlalchemy_engine:
+                    self.logger.error("SQLAlchemy 엔진이 초기화되지 않았습니다")
                     return False
 
+                # 🔥 수정: SQLAlchemy text() 함수 사용
+                from sqlalchemy import text
+
                 with self.sqlalchemy_engine.connect() as conn:
-                    result = conn.execute(test_query)
+                    result = conn.execute(text(test_query))
                     row = result.fetchone()
                     return row is not None
 
@@ -543,7 +549,7 @@ class DatabaseManager:
                 if table_name == "PY_NP_TRMN_RMNY_TXN":
                     sample_query = f"""
                     SELECT TOP {limit}
-                        SUBSTRING(HTEL_NO, 1, 3) + '****' + RIGHT(HTEL_NO, 4) as masked_phone,
+                        SUBSTRING(TEL_NO, 1, 3) + '****' + RIGHT(TEL_NO, 4) as masked_phone,
                         SVC_CONT_ID,
                         PAY_AMT,
                         COMM_CMPN_NM as operator,
@@ -554,7 +560,7 @@ class DatabaseManager:
                 elif table_name == "PY_NP_SBSC_RMNY_TXN":
                     sample_query = f"""
                     SELECT TOP {limit}
-                        SUBSTRING(HTEL_NO, 1, 3) + '****' + RIGHT(HTEL_NO, 4) as masked_phone,
+                        SUBSTRING(TEL_NO, 1, 3) + '****' + RIGHT(TEL_NO, 4) as masked_phone,
                         SVC_CONT_ID,
                         SETL_AMT,
                         COMM_CMPN_NM as operator,

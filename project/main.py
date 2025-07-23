@@ -1056,10 +1056,40 @@ def display_chatbot(db_manager):
 
     # Azure 설정으로 SQL 생성기 초기화
     if "sql_generator" not in st.session_state:
-        from sql_generator import SQLGenerator
+        try:
+            from sql_generator import SQLGenerator
 
-        azure_config = get_azure_config()
-        st.session_state.sql_generator = SQLGenerator(azure_config)
+            azure_config = get_azure_config()
+
+            # 🔥 추가: OpenAI 배포 상태 확인
+            if azure_config.openai_api_key and azure_config.openai_endpoint:
+                deployment_status = azure_config.validate_openai_deployment()
+
+                if not deployment_status["model_available"]:
+                    st.warning(
+                        f"⚠️ OpenAI 모델 배포 문제: {deployment_status['recommendation']}"
+                    )
+
+                    # 사용 가능한 모델이 있으면 표시
+                    if deployment_status["available_models"]:
+                        with st.expander("🔍 사용 가능한 모델 목록"):
+                            for model in deployment_status["available_models"]:
+                                st.code(f"- {model}")
+
+                        # 첫 번째 사용 가능한 모델로 임시 변경
+                        azure_config.openai_model_name = deployment_status[
+                            "available_models"
+                        ][0]
+                        st.info(
+                            f"임시로 '{azure_config.openai_model_name}' 모델을 사용합니다."
+                        )
+
+            st.session_state.sql_generator = SQLGenerator(azure_config)
+
+        except Exception as e:
+            st.error(f"SQL 생성기 초기화 실패: {e}")
+            st.info("규칙 기반 쿼리 생성만 사용됩니다.")
+            st.session_state.sql_generator = None
 
     # 채팅 히스토리 초기화
     if "chat_history" not in st.session_state:
@@ -1077,7 +1107,7 @@ def display_chatbot(db_manager):
     with col2:
         if st.button("🔍 특정 번호 조회"):
             st.session_state.user_input = (
-                "HTEL_NO가 01012345678인 번호의 정산 내역 확인해줘"
+                "TEL_NO가 01012345678인 번호의 정산 내역 확인해줘"
             )
 
     with col3:
@@ -1345,7 +1375,7 @@ def display_sidebar(db_manager):
         **자연어 쿼리 예시:**
         - "최근 3개월 포트인 현황"
         - "COMM_CMPN_NM별 정산 내역"
-        - "HTEL_NO 조회"
+        - "TEL_NO 조회"
         - "월별 SETL_AMT 추이"
         - "DEPAZ_AMT 합계 현황"
         

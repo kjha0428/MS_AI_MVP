@@ -94,6 +94,82 @@ class AzureConfig:
             self.logger.error(f"Azure OpenAI 클라이언트 생성 실패: {e}")
             return None
 
+    def get_available_models(self) -> list:
+        """사용 가능한 OpenAI 모델 목록 조회"""
+        try:
+            if not self.openai_api_key or not self.openai_endpoint:
+                return []
+
+            client = self.get_openai_client()
+            if not client:
+                return []
+
+            # 🔥 추가: 일반적으로 사용되는 모델명들
+            common_models = [
+                "gpt-4",
+                "gpt-4-32k",
+                "gpt-35-turbo",
+                "gpt-35-turbo-16k",
+                "gpt-3.5-turbo",
+                "text-davinci-003",
+            ]
+
+            available_models = []
+            for model in common_models:
+                try:
+                    # 간단한 테스트 요청으로 모델 사용 가능 여부 확인
+                    test_response = client.chat.completions.create(
+                        model=model,
+                        messages=[{"role": "user", "content": "test"}],
+                        max_tokens=1,
+                    )
+                    available_models.append(model)
+                    self.logger.info(f"사용 가능한 모델: {model}")
+                except Exception as e:
+                    if "DeploymentNotFound" in str(e):
+                        self.logger.debug(f"모델 '{model}' 배포되지 않음")
+                    else:
+                        self.logger.debug(f"모델 '{model}' 테스트 실패: {e}")
+
+            return available_models
+
+        except Exception as e:
+            self.logger.error(f"모델 목록 조회 실패: {e}")
+            return []
+
+    def validate_openai_deployment(self) -> dict:
+        """OpenAI 배포 상태 검증"""
+        result = {
+            "configured_model": self.openai_model_name,
+            "model_available": False,
+            "available_models": [],
+            "recommendation": None,
+        }
+
+        try:
+            available_models = self.get_available_models()
+            result["available_models"] = available_models
+
+            if self.openai_model_name in available_models:
+                result["model_available"] = True
+                result["recommendation"] = (
+                    f"설정된 모델 '{self.openai_model_name}'이 사용 가능합니다."
+                )
+            else:
+                if available_models:
+                    result["recommendation"] = (
+                        f"'{self.openai_model_name}' 대신 '{available_models[0]}'을 사용하세요."
+                    )
+                else:
+                    result["recommendation"] = (
+                        "사용 가능한 모델이 없습니다. Azure OpenAI 배포를 확인하세요."
+                    )
+
+        except Exception as e:
+            result["recommendation"] = f"모델 검증 실패: {e}"
+
+        return result
+
     def get_database_connection_string(self) -> Optional[str]:
         """SQLAlchemy용 연결 URL 반환 (None 체크 강화)"""
         try:

@@ -138,19 +138,35 @@ class SQLGenerator:
         try:
             # 1. AI 기반 쿼리 생성 시도
             if self.openai_client:
-                ai_sql = self._generate_ai_sql(user_input)
-                if ai_sql and self._validate_sql(ai_sql):
-                    self.logger.info("AI 기반 SQL 쿼리 생성 성공")
-                    return ai_sql, True
-                else:
-                    self.logger.warning("AI 생성 쿼리 검증 실패, 규칙 기반으로 전환")
+                try:
+                    ai_sql = self._generate_ai_sql(user_input)
+                    if ai_sql and self._validate_sql(ai_sql):
+                        self.logger.info("AI 기반 SQL 쿼리 생성 성공")
+                        return ai_sql, True
+                    else:
+                        self.logger.warning(
+                            "AI 생성 쿼리 검증 실패, 규칙 기반으로 전환"
+                        )
+                except Exception as ai_error:
+                    self.logger.error(f"AI SQL 생성 중 오류: {ai_error}")
 
             # 2. 규칙 기반 쿼리 생성 (백업)
-            rule_sql = self._generate_rule_based_sql(user_input)
-            return rule_sql, False
+            try:
+                rule_sql = self._generate_rule_based_sql(user_input)
+
+                if self._validate_sql(rule_sql):
+                    self.logger.info("규칙 기반 SQL 쿼리 생성 성공")
+                    return rule_sql, False
+                else:
+                    self.logger.warning("규칙 기반 쿼리 검증 실패, 기본 쿼리 사용")
+            except Exception as rule_error:
+                self.logger.error(f"규칙 기반 SQL 생성 중 오류: {rule_error}")
+
+            # 3. 최종 백업: 기본 쿼리
+            return self._get_default_query(), False
 
         except Exception as e:
-            self.logger.error(f"SQL 생성 실패: {e}")
+            self.logger.error(f"전체 SQL 생성 실패: {e}")
             return self._get_default_query(), False
 
     def _generate_ai_sql(self, user_input: str) -> Optional[str]:
@@ -164,20 +180,32 @@ class SQLGenerator:
                 },
             ]
 
-            response = self.openai_client.chat.completions.create(
-                model="gpt-4",  # 실제 배포된 모델명으로 변경
-                messages=messages,
-                max_tokens=1000,
-                temperature=0.1,
-                top_p=0.9,
-            )
+            # 🔥 수정: 모델명을 azure_config에서 가져오되, 기본값 설정
+            model_name = self.azure_config.openai_model_name or "gpt-4o"
+
+            # 🔥 수정: 배포된 모델명 확인 및 예외 처리
+            try:
+                response = self.openai_client.chat.completions.create(
+                    model=model_name,  # 🔥 변경: 하드코딩된 "gpt-4" 대신 설정값 사용
+                    messages=messages,
+                    max_tokens=1000,
+                    temperature=0.1,
+                    top_p=0.9,
+                )
+            except Exception as api_error:
+                # 🔥 추가: 404 오류 특별 처리
+                if "DeploymentNotFound" in str(api_error) or "404" in str(api_error):
+                    self.logger.warning(
+                        f"배포된 모델 '{model_name}'을 찾을 수 없습니다. 대체 모델을 시도합니다."
+                    )
+                else:
+                    # 다른 API 오류는 그대로 전파
+                    raise api_error
 
             sql_query = response.choices[0].message.content.strip()
 
             # SQL 블록에서 쿼리 추출 (```sql ... ``` 형태)
-            sql_match = re.search(r"```sql\s*(.*?)\s*```", sql_query, re.DOTALL)
-            if sql_match:
-                sql_query = sql_match.group(1).strip()
+            sql_query = self._extract_sql_from_response(sql_query)
 
             return sql_query
 
@@ -185,40 +213,111 @@ class SQLGenerator:
             self.logger.error(f"AI SQL 생성 실패: {e}")
             return None
 
-    def _generate_rule_based_sql(self, user_input: str) -> str:
-        """규칙 기반 SQL 쿼리 생성 (고도화 버전)"""
-        user_input_lower = user_input.lower()
+    def _extract_operator_filter(self, user_input: str) -> str:
+        """통신사 필터 추출"""
+        for key, value in self.operator_mapping.items():
+            if key.lower() in user_input.lower():
+                return f"AND (BCHNG_COMM_CMPN_ID = '{value}' OR ACHNG_COMM_CMPN_ID = '{value}')"
+        return ""
 
-        # 통신사 필터 추출
-        operator_filter = self._extract_operator_filter(user_input_lower)
+    def _generate_rule_based_sql(self, user_input: str) -> str:
+        """규칙 기반 SQL 쿼리 생성"""
+        user_input_lower = user_input.lower()
 
         # 기간 필터 추출
         date_filter = self._extract_date_filter(user_input_lower)
 
-        # 쿼리 타입 결정 및 생성
-        if self._is_monthly_trend_query(user_input_lower):
-            return self._generate_monthly_trend_query(
-                user_input_lower, operator_filter, date_filter
-            )
+        # 1. 월별 집계 쿼리
+        if "월별" in user_input_lower or "추이" in user_input_lower:
+            if "포트인" in user_input_lower:
+                return f"""
+                SELECT 
+                    strftime('%Y-%m', TRT_DATE) as 월,
+                    BCHNG_COMM_CMPN_ID as 전사업자,
+                    COUNT(*) as 총건수,
+                    SUM(SETL_AMT) as 총금액,
+                    ROUND(AVG(SETL_AMT), 0) as 평균금액
+                FROM PY_NP_SBSC_RMNY_TXN 
+                WHERE TRT_DATE >= {date_filter}
+                    AND NP_STTUS_CD IN ('OK', 'WD')
+                GROUP BY strftime('%Y-%m', TRT_DATE), BCHNG_COMM_CMPN_ID
+                ORDER BY 월 DESC, 총금액 DESC
+                """
+            elif "포트아웃" in user_input_lower:
+                return f"""
+                SELECT 
+                    strftime('%Y-%m', NP_TRMN_DATE) as 월,
+                    BCHNG_COMM_CMPN_ID as 전사업자,
+                    COUNT(*) as 총건수,
+                    SUM(PAY_AMT) as 총금액,
+                    ROUND(AVG(PAY_AMT), 0) as 평균금액
+                FROM PY_NP_TRMN_RMNY_TXN 
+                WHERE NP_TRMN_DATE >= {date_filter}
+                    AND NP_TRMN_DTL_STTUS_VAL IN ('1', '3')
+                GROUP BY strftime('%Y-%m', NP_TRMN_DATE), BCHNG_COMM_CMPN_ID
+                ORDER BY 월 DESC, 총금액 DESC
+                """
 
-        elif self._is_phone_search_query(user_input):
-            return self._generate_phone_search_query(user_input)
+        # 2. 전화번호 검색
+        phone_match = re.search(r"010[- ]?\d{4}[- ]?\d{4}", user_input)
+        if phone_match:
+            phone = phone_match.group().replace("-", "").replace(" ", "")
+            return f"""
+            SELECT 
+                'PORT_IN' as 번호이동타입,
+                TRT_DATE as 번호이동일,
+                SUBSTR(TEL_NO, 1, 3) || '****' || SUBSTR(TEL_NO, -4) as 전화번호,
+                SETL_AMT as 정산금액,
+                BCHNG_COMM_CMPN_ID as 전사업자,
+                NP_STTUS_CD as 상태
+            FROM PY_NP_SBSC_RMNY_TXN 
+            WHERE TEL_NO = '{phone}' AND NP_STTUS_CD IN ('OK', 'WD')
+            UNION ALL
+            SELECT 
+                'PORT_OUT' as 번호이동타입,
+                NP_TRMN_DATE as 번호이동일,
+                SUBSTR(TEL_NO, 1, 3) || '****' || SUBSTR(TEL_NO, -4) as 전화번호,
+                PAY_AMT as 정산금액,
+                BCHNG_COMM_CMPN_ID as 전사업자,
+                NP_TRMN_DTL_STTUS_VAL as 상태
+            FROM PY_NP_TRMN_RMNY_TXN 
+            WHERE TEL_NO = '{phone}' AND NP_TRMN_DTL_STTUS_VAL IN ('1', '3')
+            ORDER BY 번호이동일 DESC
+            """
 
-        elif self._is_operator_comparison_query(user_input_lower):
-            return self._generate_operator_comparison_query(
-                operator_filter, date_filter
-            )
+        # 3. 사업자별 현황
+        if any(
+            keyword in user_input_lower
+            for keyword in ["사업자", "회사", "통신사", "현황"]
+        ):
+            return f"""
+            SELECT 
+                BCHNG_COMM_CMPN_ID as 사업자,
+                'PORT_IN' as 타입,
+                COUNT(*) as 건수,
+                SUM(SETL_AMT) as 총금액,
+                ROUND(AVG(SETL_AMT), 0) as 평균금액
+            FROM PY_NP_SBSC_RMNY_TXN
+            WHERE TRT_DATE >= {date_filter}
+                AND NP_STTUS_CD IN ('OK', 'WD')
+            GROUP BY BCHNG_COMM_CMPN_ID
+            UNION ALL
+            SELECT 
+                BCHNG_COMM_CMPN_ID as 사업자,
+                'PORT_OUT' as 타입,
+                COUNT(*) as 건수,
+                SUM(PAY_AMT) as 총금액,
+                ROUND(AVG(PAY_AMT), 0) as 평균금액
+            FROM PY_NP_TRMN_RMNY_TXN
+            WHERE NP_TRMN_DATE >= {date_filter}
+                AND NP_TRMN_DTL_STTUS_VAL IN ('1', '3')
+            GROUP BY BCHNG_COMM_CMPN_ID
+            """
 
-        elif self._is_deposit_query(user_input_lower):
-            return self._generate_deposit_query(operator_filter, date_filter)
+        # 4. 기본 요약 쿼리
+        return self._get_default_query()
 
-        elif self._is_anomaly_detection_query(user_input_lower):
-            return self._generate_anomaly_detection_query(date_filter)
-
-        else:
-            return self._generate_summary_query(date_filter)
-
-    def _extract_operator_filter(self, user_input: str) -> str:
+    def perator_filter(self, user_input: str) -> str:
         """통신사 필터 추출"""
         for key, value in self.operator_mapping.items():
             if key in user_input and "포트인" in user_input:
@@ -229,33 +328,25 @@ class SQLGenerator:
 
     def _extract_date_filter(self, user_input: str) -> str:
         """기간 필터 추출"""
-        date_patterns = {
-            "오늘": "date('now')",
-            "어제": "date('now', '-1 day')",
-            "이번주": "date('now', 'weekday 0', '-6 days')",
-            "지난주": "date('now', 'weekday 0', '-13 days')",
-            "이번달": "date('now', 'start of month')",
-            "지난달": "date('now', 'start of month', '-1 month')",
-            "최근 1주일": "date('now', '-7 days')",
-            "최근 7일": "date('now', '-7 days')",
-            "최근 1개월": "date('now', '-1 month')",
-            "최근 30일": "date('now', '-30 days')",
-            "최근 3개월": "date('now', '-3 months')",
-            "최근 6개월": "date('now', '-6 months')",
-            "최근 1년": "date('now', '-1 year')",
-        }
+        import re
 
-        for period, sql_date in date_patterns.items():
-            if period in user_input:
-                return sql_date
+        if "최근 1개월" in user_input or "최근 한달" in user_input:
+            return "date('now', '-1 month')"
+        elif "최근 3개월" in user_input:
+            return "date('now', '-3 months')"
+        elif "최근 6개월" in user_input:
+            return "date('now', '-6 months')"
+        elif "최근 1년" in user_input:
+            return "date('now', '-1 year')"
 
-        # 숫자 + 개월/월 패턴 검색
+        # 숫자 + 개월 패턴 검색
         month_match = re.search(r"(\d+)개?월", user_input)
         if month_match:
             months = int(month_match.group(1))
             return f"date('now', '-{months} months')"
 
-        return "date('now', '-3 months')"  # 기본값
+        # 기본값: 최근 3개월
+        return "date('now', '-3 months')"
 
     def _is_monthly_trend_query(self, user_input: str) -> bool:
         """월별 추이 쿼리 여부 판단"""
@@ -393,28 +484,28 @@ class SQLGenerator:
                 SELECT 
                     'PORT_IN' as port_type,
                     TRT_DATE as transaction_date,
-                    SUBSTRING(HTEL_NO, 1, 3) + '****' + RIGHT(HTEL_NO, 4) as masked_phone,
+                    SUBSTRING(TEL_NO, 1, 3) + '****' + RIGHT(TEL_NO, 4) as masked_phone,
                     SVC_CONT_ID,
                     SETL_AMT as settlement_amount,
                     COMM_CMPN_NM as operator_name,
                     TRT_STUS_CD as status,
                     '포트인: ' + COMM_CMPN_NM + '로 이동' as description
                 FROM PY_NP_SBSC_RMNY_TXN 
-                WHERE HTEL_NO = '{phone}' AND TRT_STUS_CD IN ('OK', 'WD')
+                WHERE TEL_NO = '{phone}' AND TRT_STUS_CD IN ('OK', 'WD')
                 
                 UNION ALL
                 
                 SELECT 
                     'PORT_OUT' as port_type,
                     SETL_TRT_DATE as transaction_date,
-                    SUBSTRING(HTEL_NO, 1, 3) + '****' + RIGHT(HTEL_NO, 4) as masked_phone,
+                    SUBSTRING(TEL_NO, 1, 3) + '****' + RIGHT(TEL_NO, 4) as masked_phone,
                     SVC_CONT_ID,
                     PAY_AMT as settlement_amount,
                     COMM_CMPN_NM as operator_name,
                     NP_TRMN_DTL_STTUS_VAL as status,
                     '포트아웃: ' + COMM_CMPN_NM + '에서 이동' as description
                 FROM PY_NP_TRMN_RMNY_TXN 
-                WHERE HTEL_NO = '{phone}' AND NP_TRMN_DTL_STTUS_VAL IN ('1', '3')
+                WHERE TEL_NO = '{phone}' AND NP_TRMN_DTL_STTUS_VAL IN ('1', '3')
             )
             SELECT 
                 port_type,
@@ -632,28 +723,53 @@ class SQLGenerator:
         """
 
     def _get_default_query(self) -> str:
-        """기본 쿼리 반환 - Azure SQL 문법"""
+        """기본 쿼리 반환"""
         return """
         SELECT 
-            'PORT_IN' as port_type,
-            COUNT(*) as transaction_count,
-            SUM(SETL_AMT) as total_amount,
-            ROUND(AVG(CAST(SETL_AMT AS FLOAT)), 0) as avg_amount
+            'PORT_IN' as 번호이동타입,
+            COUNT(*) as 거래건수,
+            SUM(SETL_AMT) as 총금액,
+            ROUND(AVG(SETL_AMT), 0) as 평균금액
         FROM PY_NP_SBSC_RMNY_TXN
-        WHERE TRT_DATE >= DATEADD(month, -1, GETDATE()) AND TRT_STUS_CD IN ('OK', 'WD')
+        WHERE TRT_DATE >= date('now', '-1 months') 
+            AND NP_STTUS_CD IN ('OK', 'WD')
         UNION ALL
         SELECT 
-            'PORT_OUT' as port_type,
-            COUNT(*) as transaction_count,
-            SUM(PAY_AMT) as total_amount,
-            ROUND(AVG(CAST(PAY_AMT AS FLOAT)), 0) as avg_amount
+            'PORT_OUT' as 번호이동타입,
+            COUNT(*) as 거래건수,
+            SUM(PAY_AMT) as 총금액,
+            ROUND(AVG(PAY_AMT), 0) as 평균금액
         FROM PY_NP_TRMN_RMNY_TXN
-        WHERE SETL_TRT_DATE >= DATEADD(month, -1, GETDATE()) AND NP_TRMN_DTL_STTUS_VAL IN ('1', '3')
+        WHERE NP_TRMN_DATE >= date('now', '-1 months') 
+            AND NP_TRMN_DTL_STTUS_VAL IN ('1', '3')
         """
+
+    def _extract_sql_from_response(self, response: str) -> str:
+        """응답에서 SQL 쿼리 추출"""
+        import re
+
+        # ```sql ... ``` 블록에서 추출
+        sql_match = re.search(
+            r"```sql\s*(.*?)\s*```", response, re.DOTALL | re.IGNORECASE
+        )
+        if sql_match:
+            return sql_match.group(1).strip()
+
+        # ``` ... ``` 블록에서 추출
+        code_match = re.search(r"```\s*(.*?)\s*```", response, re.DOTALL)
+        if code_match:
+            return code_match.group(1).strip()
+
+        # 블록이 없으면 전체 응답 반환
+        return response.strip()
 
     def _validate_sql(self, sql_query: str) -> bool:
         """생성된 SQL 쿼리 검증"""
         try:
+            if not sql_query or not sql_query.strip():
+                self.logger.warning("빈 SQL 쿼리")
+                return False
+
             sql_upper = sql_query.upper().strip()
 
             # 1. SELECT 문인지 확인
@@ -670,6 +786,8 @@ class SQLGenerator:
                 "ALTER",
                 "CREATE",
                 "TRUNCATE",
+                "EXEC",
+                "EXECUTE",
             ]
             for keyword in dangerous_keywords:
                 if keyword in sql_upper:
