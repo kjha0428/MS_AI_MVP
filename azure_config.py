@@ -105,7 +105,7 @@ class AzureConfig:
                 return []
 
             # 🔥 추가: 일반적으로 사용되는 모델명들
-            common_models = ["gpt-4o"]
+            common_models = ["gpt-4o", "gpt-4", "gpt-4o-mini"]
 
             available_models = []
             for model in common_models:
