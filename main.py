@@ -1292,49 +1292,10 @@ def display_chatbot(db_manager):
     # Azure 설정으로 SQL 생성기 초기화
     if "sql_generator" not in st.session_state:
         try:
-            st.info("🤖 웹앱에서 AI SQL 생성기 초기화 중...")
-            
             azure_config = get_azure_config()
-            
-            # 🔥 추가: 웹앱 환경변수 디버깅
-            import os
-            st.write("웹앱 환경변수 확인:")
-            st.write(f"- AZURE_OPENAI_API_KEY: {'설정됨' if os.getenv('AZURE_OPENAI_API_KEY') else '❌ 없음'}")
-            st.write(f"- AZURE_OPENAI_ENDPOINT: {os.getenv('AZURE_OPENAI_ENDPOINT', '❌ 없음')}")
-            st.write(f"- AZURE_OPENAI_MODEL_NAME: {os.getenv('AZURE_OPENAI_MODEL_NAME', '❌ 없음')}")
-            
-            # 웹앱 환경에서 설정 검증
-            if not azure_config.openai_api_key:
-                st.error("""
-                🔥 웹앱 환경변수 설정 필요!
-                
-                Azure Portal → Web Apps → [앱 이름] → 구성 → 애플리케이션 설정에서 추가:
-                - AZURE_OPENAI_API_KEY
-                - AZURE_OPENAI_ENDPOINT  
-                - AZURE_OPENAI_API_VERSION
-                - AZURE_OPENAI_MODEL_NAME
-                """)
-                st.session_state.sql_generator = None
-            else:
-                # SQLGenerator 생성 및 OpenAI 연결 테스트
-                sql_generator = SQLGenerator(azure_config)
-                
-                if sql_generator.openai_client:
-                    st.success("✅ 웹앱에서 AI SQL 생성기 초기화 성공!")
-                    st.session_state.sql_generator = sql_generator
-                else:
-                    st.error("""
-                    ❌ 웹앱에서 OpenAI 연결 실패!
-                    
-                    확인 사항:
-                    1. Azure OpenAI 리소스 → 네트워킹 → '모든 네트워크' 설정
-                    2. 웹앱 환경변수가 올바르게 설정되었는지 확인
-                    3. API 키와 엔드포인트가 유효한지 확인
-                    """)
-                    st.session_state.sql_generator = None
-                    
+            st.session_state.sql_generator = SQLGenerator(azure_config)
         except Exception as e:
-            st.error(f"❌ 웹앱에서 SQL 생성기 초기화 실패: {e}")
+            st.error(f"SQL 생성기 초기화 실패: {e}")
             st.session_state.sql_generator = None
 
     # 대화 히스토리 초기화
