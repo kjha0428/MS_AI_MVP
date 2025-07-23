@@ -1243,6 +1243,7 @@ def display_chatbot(db_manager):
             "01012345678 데이터의 예치금 데이터 잘 쌓였는지 검증해줘",
             "포트인 데이터 월별 추이 분석해줘",
             "포트아웃 테이블에서 최근 1개월 발생한 데이터 요약해줘",
+            "포트아웃 데이터 샘플 하나 뽑아서 예치금 데이터 조회해줘",
         ]
         for i, example in enumerate(examples):
             if st.button(f"💬 {example}", key=f"example_{i}"):
@@ -1264,7 +1265,7 @@ def display_chatbot(db_manager):
         "💬 질문을 입력하세요:",
         key="user_input",
         value=st.session_state.current_input,
-        placeholder="예: '최근 3개월 COMM_CMPN_NM별 SETL_AMT 합계 알려줘'",
+        placeholder="예: '최근 3개월 사업자별 SETL_AMT 합계 알려줘'",
     )
 
     # 버튼들 왼쪽 배치

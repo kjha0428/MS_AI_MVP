@@ -4,6 +4,7 @@ import re
 import logging
 from typing import Dict, List, Optional, Tuple
 from azure_config import AzureConfig
+from azure_config import get_azure_config
 
 
 class SQLGenerator:
@@ -385,7 +386,7 @@ class SQLGenerator:
             return f"""
             SELECT 
                 FORMAT(TRT_DATE, 'yyyy-MM') as month,
-                COMM_CMPN_NM as operator_name,
+                BCHNG_COMM_CMPN_ID as operator_name,
                 COUNT(*) as transaction_count,
                 SUM(SETL_AMT) as total_amount,
                 ROUND(AVG(CAST(SETL_AMT AS FLOAT)), 0) as avg_amount,
@@ -395,7 +396,7 @@ class SQLGenerator:
             WHERE TRT_DATE >= {azure_date_filter}
                 AND TRT_STUS_CD IN ('OK', 'WD')
                 {operator_filter}
-            GROUP BY FORMAT(TRT_DATE, 'yyyy-MM'), COMM_CMPN_NM
+            GROUP BY FORMAT(TRT_DATE, 'yyyy-MM'), BCHNG_COMM_CMPN_ID
             ORDER BY month DESC, total_amount DESC
             """
 
@@ -403,7 +404,7 @@ class SQLGenerator:
             return f"""
             SELECT 
                 FORMAT(SETL_TRT_DATE, 'yyyy-MM') as month,
-                COMM_CMPN_NM as operator_name,
+                ACHNG_COMM_CMPN_ID as operator_name,
                 COUNT(*) as transaction_count,
                 SUM(PAY_AMT) as total_amount,
                 ROUND(AVG(CAST(PAY_AMT AS FLOAT)), 0) as avg_amount,
@@ -413,7 +414,7 @@ class SQLGenerator:
             WHERE SETL_TRT_DATE >= {azure_date_filter}
                 AND NP_TRMN_DTL_STTUS_VAL IN ('1', '3')
                 {operator_filter}
-            GROUP BY FORMAT(SETL_TRT_DATE, 'yyyy-MM'), COMM_CMPN_NM
+            GROUP BY FORMAT(SETL_TRT_DATE, 'yyyy-MM'), ACHNG_COMM_CMPN_ID
             ORDER BY month DESC, total_amount DESC
             """
 
@@ -424,7 +425,7 @@ class SQLGenerator:
                 SELECT 
                     FORMAT(TRT_DATE, 'yyyy-MM') as month,
                     'PORT_IN' as port_type,
-                    COMM_CMPN_NM as operator_name,
+                    BCHNG_COMM_CMPN_ID as operator_name,
                     COUNT(*) as transaction_count,
                     SUM(SETL_AMT) as total_amount,
                     ROUND(AVG(CAST(SETL_AMT AS FLOAT)), 0) as avg_amount
@@ -432,14 +433,12 @@ class SQLGenerator:
                 WHERE TRT_DATE >= {azure_date_filter}
                     AND TRT_STUS_CD IN ('OK', 'WD')
                     {operator_filter}
-                GROUP BY FORMAT(TRT_DATE, 'yyyy-MM'), COMM_CMPN_NM
-                
+                GROUP BY FORMAT(TRT_DATE, 'yyyy-MM'), BCHNG_COMM_CMPN_ID
                 UNION ALL
-                
                 SELECT 
                     FORMAT(SETL_TRT_DATE, 'yyyy-MM') as month,
                     'PORT_OUT' as port_type,
-                    COMM_CMPN_NM as operator_name,
+                    ACHNG_COMM_CMPN_ID as operator_name,
                     COUNT(*) as transaction_count,
                     SUM(PAY_AMT) as total_amount,
                     ROUND(AVG(CAST(PAY_AMT AS FLOAT)), 0) as avg_amount
@@ -447,7 +446,7 @@ class SQLGenerator:
                 WHERE SETL_TRT_DATE >= {azure_date_filter}
                     AND NP_TRMN_DTL_STTUS_VAL IN ('1', '3')
                     {operator_filter}
-                GROUP BY FORMAT(SETL_TRT_DATE, 'yyyy-MM'), COMM_CMPN_NM
+                GROUP BY FORMAT(SETL_TRT_DATE, 'yyyy-MM'), ACHNG_COMM_CMPN_ID
             )
             SELECT 
                 month,
@@ -487,9 +486,9 @@ class SQLGenerator:
                     SUBSTRING(TEL_NO, 1, 3) + '****' + RIGHT(TEL_NO, 4) as masked_phone,
                     SVC_CONT_ID,
                     SETL_AMT as settlement_amount,
-                    COMM_CMPN_NM as operator_name,
+                    BCHNG_COMM_CMPN_ID as operator_name,
                     TRT_STUS_CD as status,
-                    '포트인: ' + COMM_CMPN_NM + '로 이동' as description
+                    '포트인: ' + BCHNG_COMM_CMPN_ID + '로 이동' as description
                 FROM PY_NP_SBSC_RMNY_TXN 
                 WHERE TEL_NO = '{phone}' AND TRT_STUS_CD IN ('OK', 'WD')
                 
@@ -501,9 +500,9 @@ class SQLGenerator:
                     SUBSTRING(TEL_NO, 1, 3) + '****' + RIGHT(TEL_NO, 4) as masked_phone,
                     SVC_CONT_ID,
                     PAY_AMT as settlement_amount,
-                    COMM_CMPN_NM as operator_name,
+                    ACHNG_COMM_CMPN_ID as operator_name,
                     NP_TRMN_DTL_STTUS_VAL as status,
-                    '포트아웃: ' + COMM_CMPN_NM + '에서 이동' as description
+                    '포트아웃: ' + ACHNG_COMM_CMPN_ID + '에서 이동' as description
                 FROM PY_NP_TRMN_RMNY_TXN 
                 WHERE TEL_NO = '{phone}' AND NP_TRMN_DTL_STTUS_VAL IN ('1', '3')
             )
@@ -541,7 +540,7 @@ class SQLGenerator:
             WHERE TRT_DATE >= {azure_date_filter}
                 AND TRT_STUS_CD IN ('OK', 'WD')
                 {operator_filter}
-            GROUP BY COMM_CMPN_NM
+            GROUP BY BCHNG_COMM_CMPN_ID
             UNION ALL
             SELECT 
                 'PORT_OUT' as port_type,
@@ -555,7 +554,7 @@ class SQLGenerator:
             WHERE NP_TRMN_DATE >= {azure_date_filter}
                 AND NP_TRMN_DTL_STTUS_VAL IN ('1', '3')
                 {operator_filter}
-            GROUP BY COMM_CMPN_NM
+            GROUP BY ACHNG_COMM_CMPN_ID
         ),
         ranked_operators AS (
             SELECT 
@@ -834,7 +833,7 @@ class SQLGenerator:
         if "GROUP BY" in sql_upper:
             if "STRFTIME" in sql_upper:
                 explanations.append("📅 월별로 그룹화하여 분석합니다")
-            if "COMM_CMPN_NM" in sql_query:
+            if "ACHNG_COMM_CMPN_ID" in sql_query or "BHNG_COMM_CMPN_ID" in sql_query:
                 explanations.append("🏢 통신사별로 그룹화하여 분석합니다")
 
         # 정렬 분석
@@ -853,7 +852,6 @@ class SQLGenerator:
 # 테스트 함수
 def test_sql_generator():
     """SQL 생성기 테스트"""
-    from azure_config import get_azure_config
 
     print("🧪 SQL 생성기 테스트를 시작합니다...")
 
