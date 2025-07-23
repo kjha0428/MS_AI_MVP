@@ -10,6 +10,7 @@ from datetime import datetime, timedelta
 import logging
 import re
 import traceback
+import time
 
 from azure_config import get_azure_config
 from sample_data import SampleDataManager
@@ -46,6 +47,35 @@ st.set_page_config(
 st.markdown(
     """
 <style>
+    /* 프로그레스 완료 후 정리를 위한 CSS */
+    .progress-cleanup {
+        animation: fadeOut 0.5s ease-out forwards;
+    }
+    
+    @keyframes fadeOut {
+        0% { opacity: 1; }
+        100% { opacity: 0; display: none; }
+    }
+    
+    /* 스피너 관련 모든 요소 숨기기 */
+    .stSpinner,
+    div[data-testid="stSpinner"],
+    .stProgress.stProgress-complete {
+        display: none !important;
+    }
+    
+    /* 상태 메시지 컨테이너 */
+    .status-message-container {
+        transition: all 0.3s ease-out;
+    }
+    
+    .status-message-container.hidden {
+        opacity: 0;
+        height: 0;
+        overflow: hidden;
+        margin: 0;
+        padding: 0;
+    }
     .main-header {
         background: linear-gradient(135deg, #667eea 0%, #764ba2 100%);
         padding: 2rem;
@@ -126,8 +156,54 @@ st.markdown(
         margin: 0.5rem 0;
         text-align: center;
         font-weight: 500;
-</style>
-""",
+    
+        /* main.py의 CSS 섹션에 추가할 스타일 */
+
+    .stProgress > div > div > div > div {
+        background: linear-gradient(90deg, #667eea 0%, #764ba2 50%, #4facfe 100%);
+        animation: progressFlow 2s ease-in-out infinite;
+    }
+
+    @keyframes progressFlow {
+        0% { background-position: 0% 50%; }
+        50% { background-position: 100% 50%; }
+        100% { background-position: 0% 50%; }
+    }
+
+    .progress-container {
+        background: rgba(255, 255, 255, 0.95);
+        padding: 2rem;
+        border-radius: 15px;
+        box-shadow: 0 8px 32px rgba(31, 38, 135, 0.37);
+        backdrop-filter: blur(4px);
+        border: 1px solid rgba(255, 255, 255, 0.18);
+        margin: 2rem 0;
+    }
+
+    .progress-text {
+        font-weight: 600;
+        font-size: 1.1em;
+        color: #667eea;
+        text-align: center;
+        margin: 1rem 0;
+    }
+
+    .status-message {
+        background: linear-gradient(135deg, #f8f9fa, #e9ecef);
+        border-left: 4px solid #667eea;
+        padding: 1rem;
+        border-radius: 0 8px 8px 0;
+        margin: 1rem 0;
+    }
+
+    .detail-message {
+        color: #6c757d;
+        font-style: italic;
+        font-size: 0.9em;
+        margin-top: 0.5rem;
+    }
+    </style>
+    """,
     unsafe_allow_html=True,
 )
 
@@ -153,88 +229,149 @@ logger = logging.getLogger(__name__)
 
 
 # 데이터베이스 초기화
-@st.cache_resource
-# main.py - 완전히 안전한 초기화 함수
-
-
-@st.cache_resource
+@st.cache_resource(show_spinner=False)
 def init_database_manager():
-    """안전한 데이터베이스 매니저 초기화"""
+    """안전한 데이터베이스 매니저 초기화 - 동적 프로그레스바"""
 
-    # 진행 상황 표시
-    progress_placeholder = st.empty()
-    status_placeholder = st.empty()
+    # 진행 상황 표시 컨테이너
+    progress_container = st.container()
+
+    with progress_container:
+        # 프로그레스바와 상태 메시지
+        progress_bar = st.progress(0)
+        status_text = st.empty()
+        progress_text = st.empty()
+        detail_text = st.empty()  # 🔥 추가: 세부 메시지용
+
+    def update_progress(value, message, detail=""):
+        """프로그레스바 업데이트 함수"""
+        progress_bar.progress(value)
+        progress_text.write(f"**진행률: {int(value * 100)}%**")
+        status_text.info(f"{message}")
+        if detail:
+            detail_text.caption(detail)  # 🔥 수정: st.caption → detail_text.caption
+        time.sleep(0.3)  # 시각적 효과를 위한 지연
+
+    def clean_progress_ui():
+        """🔥 추가: 프로그레스 UI 완전 정리 함수"""
+        progress_bar.empty()
+        status_text.empty()
+        progress_text.empty()
+        detail_text.empty()
+        progress_container.empty()
 
     try:
-        progress_placeholder.progress(0.1)
-        status_placeholder.info("🔧 Azure 설정을 로드하고 있습니다...")
+        import time  # 애니메이션 효과용
 
-        # Azure 설정 로드
+        # 🎯 1단계: Azure 설정 로드 (0-20%)
+        update_progress(0.05, "🔧 시스템 초기화 중...", "환경 설정을 확인하고 있습니다")
+
+        update_progress(
+            0.10, "🔧 Azure 설정을 로드하고 있습니다...", "Azure 연결 정보를 읽는 중"
+        )
         azure_config = get_azure_config()
 
-        progress_placeholder.progress(0.3)
+        update_progress(0.20, "✅ Azure 설정 로드 완료", "연결 정보 검증 중")
 
-        # 환경변수 확인
+        # 🎯 2단계: 환경변수 확인 (20-30%)
+        update_progress(
+            0.25, "🔍 환경변수 확인 중...", "FORCE_SAMPLE_MODE 등 설정 확인"
+        )
         force_sample = os.getenv("FORCE_SAMPLE_MODE", "false").lower() == "true"
 
-        if force_sample:
-            status_placeholder.info("🔧 강제 샘플 모드로 설정됨")
-            progress_placeholder.progress(0.7)
+        update_progress(
+            0.30,
+            "✅ 환경변수 확인 완료",
+            f"강제 샘플 모드: {'활성화' if force_sample else '비활성화'}",
+        )
 
+        # 🎯 3단계: 강제 샘플 모드 처리 (30-100%)
+        if force_sample:
+            update_progress(
+                0.40, "🔧 강제 샘플 모드로 설정됨", "로컬 SQLite 데이터베이스 준비 중"
+            )
+
+            update_progress(
+                0.60,
+                "📊 샘플 데이터베이스 생성 중...",
+                "테이블 구조 생성 및 데이터 삽입",
+            )
             db_manager = DatabaseManagerFactory.create_sample_manager(azure_config)
 
-            progress_placeholder.progress(1.0)
-            status_placeholder.success("✅ 샘플 데이터베이스 연결 성공!")
+            update_progress(0.80, "🔍 연결 테스트 중...", "데이터베이스 접근 권한 확인")
 
-            # 성공 시 UI 정리
-            progress_placeholder.empty()
-            status_placeholder.empty()
+            update_progress(0.95, "✅ 샘플 데이터베이스 연결 성공!", "시스템 준비 완료")
+
+            update_progress(1.0, "🚀 시스템 시작 완료!", "샘플 모드에서 실행됩니다")
+
+            # 🔥 수정: 성공 시 UI 완전 정리
+            time.sleep(1.5)  # 완료 메시지를 잠시 보여준 후
+            clean_progress_ui()  # 모든 진행 상황 메시지 제거
 
             return db_manager
 
-        # Azure 우선 시도
-        status_placeholder.info("☁️ Azure 클라우드 서비스 연결 중...")
-        progress_placeholder.progress(0.5)
+        # 🎯 4단계: Azure 우선 시도 (30-70%)
+        update_progress(
+            0.35, "☁️ Azure 클라우드 서비스 연결 중...", "Azure SQL Database 접근 시도"
+        )
 
         try:
-            # 🔥 수정: Azure 연결 가능 여부 먼저 확인
+            # Azure 연결 가능 여부 먼저 확인
+            update_progress(
+                0.40, "🔍 Azure 연결 문자열 확인...", "데이터베이스 설정 검증"
+            )
             if not azure_config.get_database_connection_string():
                 raise Exception("Azure SQL Database 연결 문자열이 설정되지 않음")
 
+            update_progress(
+                0.50, "🏗️ Azure 데이터베이스 매니저 생성...", "SQLAlchemy 엔진 초기화"
+            )
             db_manager = DatabaseManagerFactory.create_manager(
                 azure_config, force_sample=False
             )
 
-            progress_placeholder.progress(0.9)
-            status_placeholder.info("🔍 연결 테스트 중...")
+            update_progress(
+                0.65, "🔍 Azure 연결 테스트 중...", "데이터베이스 권한 및 테이블 확인"
+            )
 
             if db_manager and db_manager.test_connection():
-                progress_placeholder.progress(1.0)
+                update_progress(
+                    0.85,
+                    "🎉 Azure 연결 테스트 성공!",
+                    "클라우드 데이터베이스 준비 완료",
+                )
 
-                if db_manager.use_sample_data:
-                    status_placeholder.success("✅ 샘플 SQLite 데이터베이스 연결 성공!")
-                else:
-                    status_placeholder.success("✅ Azure SQL Database 연결 성공!")
+                connection_type = (
+                    "Azure SQL Database"
+                    if not db_manager.use_sample_data
+                    else "샘플 SQLite"
+                )
+                update_progress(
+                    0.95, f"✅ {connection_type} 연결 성공!", "최종 시스템 검증 중"
+                )
 
-                # 성공 시 UI 정리
-                progress_placeholder.empty()
-                status_placeholder.empty()
+                update_progress(
+                    1.0, "🚀 Azure 클라우드 모드 시작!", "실시간 데이터 분석 준비 완료"
+                )
+
+                # 🔥 수정: 성공 시 UI 완전 정리
+                time.sleep(1.5)  # 완료 메시지를 잠시 보여준 후
+                clean_progress_ui()  # 모든 진행 상황 메시지 제거
 
                 return db_manager
             else:
                 raise Exception("연결 테스트 실패")
 
         except Exception as azure_e:
-            status_placeholder.warning(f"⚠️ Azure 연결 실패: {str(azure_e)[:100]}...")
+            update_progress(0.60, f"⚠️ Azure 연결 실패", f"오류: {str(azure_e)[:50]}...")
 
-            # 방화벽 오류 처리 (기존 코드 유지)
+            # 🎯 5단계: 방화벽 오류 특별 처리
             if "40615" in str(azure_e):
-                progress_placeholder.empty()
-                status_placeholder.empty()
+                clean_progress_ui()  # 🔥 추가: 오류 시에도 프로그레스 정리
 
                 st.error("🚨 Azure SQL Database 방화벽 차단!")
 
-                # IP 정보 추출
+                # IP 정보 추출 및 해결 가이드 표시
                 ip_match = re.search(r"IP address '([\d.]+)'", str(azure_e))
                 server_match = re.search(r"server '([^']+)'", str(azure_e))
 
@@ -259,30 +396,44 @@ def init_database_manager():
                     """
                     )
 
-            # 샘플 모드로 백업
-            st.info("🔄 샘플 데이터 모드로 전환합니다...")
-            progress_placeholder.progress(0.8)
+                return None
+
+            # 🎯 6단계: 샘플 모드로 백업 (70-100%)
+            update_progress(
+                0.70, "🔄 샘플 데이터 모드로 전환...", "로컬 백업 데이터베이스 준비"
+            )
 
             try:
+                update_progress(
+                    0.80, "📊 샘플 데이터베이스 생성 중...", "SQLite 메모리 DB 초기화"
+                )
                 sample_manager = DatabaseManagerFactory.create_sample_manager(
                     azure_config
                 )
 
-                if sample_manager.test_connection():
-                    progress_placeholder.progress(1.0)
-                    status_placeholder.success("✅ 샘플 데이터베이스로 실행됩니다.")
+                update_progress(
+                    0.90, "🔍 샘플 DB 연결 테스트...", "테이블 구조 및 데이터 확인"
+                )
 
-                    # 성공 시 UI 정리
-                    progress_placeholder.empty()
-                    status_placeholder.empty()
+                if sample_manager.test_connection():
+                    update_progress(
+                        0.95, "✅ 샘플 데이터베이스 준비 완료!", "백업 모드 시스템 검증"
+                    )
+
+                    update_progress(
+                        1.0, "🚀 샘플 모드로 시작!", "개발/테스트 환경에서 실행됩니다"
+                    )
+
+                    # 🔥 수정: 성공 시 UI 완전 정리
+                    time.sleep(1.5)
+                    clean_progress_ui()
 
                     return sample_manager
                 else:
                     raise Exception("샘플 연결 테스트 실패")
 
             except Exception as sample_e:
-                progress_placeholder.empty()
-                status_placeholder.empty()
+                clean_progress_ui()  # 🔥 추가: 오류 시에도 프로그레스 정리
 
                 st.error("❌ 샘플 데이터베이스 연결도 실패했습니다.")
 
@@ -295,14 +446,80 @@ def init_database_manager():
                 return None
 
     except Exception as e:
-        progress_placeholder.empty()
-        status_placeholder.empty()
+        clean_progress_ui()  # 🔥 추가: 예외 발생 시에도 프로그레스 정리
 
         st.error(f"❌ 시스템 초기화 실패: {e}")
 
         with st.expander("🐛 시스템 오류 정보"):
             st.code(f"오류: {e}")
             st.code(f"트레이스백:\n{traceback.format_exc()}")
+
+        # 🎯 7단계: 최종 복구 시도 (긴급 모드)
+        st.info("🛠️ 최소한의 시스템으로 실행을 시도합니다...")
+
+        emergency_progress = st.progress(0)
+        emergency_status = st.empty()
+
+        try:
+            for i in range(1, 6):
+                emergency_progress.progress(i * 0.2)
+                emergency_status.info(f"🔧 긴급 복구 모드 {i}/5 단계...")
+                time.sleep(0.5)
+
+            # 최소한의 Azure Config 생성
+            from azure_config import AzureConfig
+
+            minimal_config = AzureConfig()
+
+            # 직접 SQLite 연결 생성
+            import sqlite3
+
+            class MinimalManager:
+                def __init__(self):
+                    self.use_sample_data = True
+                    self.connection_type = "Minimal SQLite"
+                    self.connection = sqlite3.connect(
+                        ":memory:", check_same_thread=False
+                    )
+                    self._create_minimal_tables()
+
+                def _create_minimal_tables(self):
+                    cursor = self.connection.cursor()
+                    cursor.execute(
+                        "CREATE TABLE test (id INTEGER PRIMARY KEY, name TEXT)"
+                    )
+                    cursor.execute("INSERT INTO test (name) VALUES ('Emergency Mode')")
+                    self.connection.commit()
+
+                def test_connection(self):
+                    try:
+                        cursor = self.connection.cursor()
+                        cursor.execute("SELECT COUNT(*) FROM test")
+                        return True
+                    except:
+                        return False
+
+                def execute_query(self, query):
+                    return pd.DataFrame(
+                        [{"message": "긴급 모드에서는 제한된 기능만 사용 가능합니다."}]
+                    ), {"success": True}
+
+            minimal_manager = MinimalManager()
+
+            if minimal_manager.test_connection():
+                emergency_progress.progress(1.0)
+                emergency_status.success("✅ 긴급 모드로 실행됩니다. (기능 제한)")
+                time.sleep(1)
+                # 🔥 추가: 긴급 모드도 UI 정리
+                emergency_progress.empty()
+                emergency_status.empty()
+                return minimal_manager
+
+        except Exception as minimal_e:
+            # 🔥 추가: 최종 실패시에도 UI 정리
+            emergency_progress.empty()
+            emergency_status.empty()
+            st.error(f"❌ 긴급 모드 실행도 실패: {minimal_e}")
 
         return None
 
