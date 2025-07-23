@@ -195,6 +195,10 @@ def init_database_manager():
         progress_placeholder.progress(0.5)
 
         try:
+            # 🔥 수정: Azure 연결 가능 여부 먼저 확인
+            if not azure_config.get_database_connection_string():
+                raise Exception("Azure SQL Database 연결 문자열이 설정되지 않음")
+
             db_manager = DatabaseManagerFactory.create_manager(
                 azure_config, force_sample=False
             )
@@ -221,7 +225,7 @@ def init_database_manager():
         except Exception as azure_e:
             status_placeholder.warning(f"⚠️ Azure 연결 실패: {str(azure_e)[:100]}...")
 
-            # 방화벽 오류 처리
+            # 방화벽 오류 처리 (기존 코드 유지)
             if "40615" in str(azure_e):
                 progress_placeholder.empty()
                 status_placeholder.empty()
@@ -252,19 +256,6 @@ def init_database_manager():
                     5. **저장 후 새로고침**: 5분 후 페이지 새로고침
                     """
                     )
-
-                    with st.expander("💻 Azure CLI 명령어"):
-                        st.code(
-                            f"""
-                            az sql server firewall-rule create \\
-                                --resource-group your-resource-group \\
-                                --server {server_name.split('.')[0]} \\
-                                --name ip-{current_ip.replace('.', '-')} \\
-                                --start-ip-address {current_ip} \\
-                                --end-ip-address {current_ip}
-                            """,
-                            language="bash",
-                        )
 
             # 샘플 모드로 백업
             st.info("🔄 샘플 데이터 모드로 전환합니다...")
@@ -299,32 +290,6 @@ def init_database_manager():
                     st.code(f"샘플 오류: {sample_e}")
                     st.code(f"트레이스백:\n{traceback.format_exc()}")
 
-                # 문제 해결 가이드
-                st.markdown("### 🔧 문제 해결 가이드")
-                st.markdown(
-                    """
-                1. **Python 환경 확인**:
-                   ```bash
-                   pip install -r requirements.txt
-                   ```
-                
-                2. **Azure 설정 확인**:
-                   - `.env` 파일에 올바른 Azure 정보 입력
-                   - Azure 서비스 상태: https://status.azure.com
-                
-                3. **네트워크 확인**:
-                   - VPN 연결 상태
-                   - 방화벽 설정
-                   - 인터넷 연결
-                
-                4. **강제 샘플 모드**:
-                   ```bash
-                   export FORCE_SAMPLE_MODE=true
-                   streamlit run main.py
-                   ```
-                """
-                )
-
                 return None
 
     except Exception as e:
@@ -336,58 +301,6 @@ def init_database_manager():
         with st.expander("🐛 시스템 오류 정보"):
             st.code(f"오류: {e}")
             st.code(f"트레이스백:\n{traceback.format_exc()}")
-
-        # 최후의 수단: 빈 샘플 데이터베이스 생성
-        st.info("🛠️ 최소한의 시스템으로 실행을 시도합니다...")
-
-        try:
-            # 최소한의 Azure Config 생성
-            from azure_config import AzureConfig
-
-            minimal_config = AzureConfig()
-
-            # 직접 SQLite 연결 생성
-            import sqlite3
-
-            # 메모리 DB 직접 생성
-            class MinimalManager:
-                def __init__(self):
-                    self.use_sample_data = True
-                    self.connection_type = "Minimal SQLite"
-                    self.connection = sqlite3.connect(
-                        ":memory:", check_same_thread=False
-                    )
-                    self._create_minimal_tables()
-
-                def _create_minimal_tables(self):
-                    cursor = self.connection.cursor()
-                    cursor.execute(
-                        "CREATE TABLE test (id INTEGER PRIMARY KEY, name TEXT)"
-                    )
-                    cursor.execute("INSERT INTO test (name) VALUES ('Sample Data')")
-                    self.connection.commit()
-
-                def test_connection(self):
-                    try:
-                        cursor = self.connection.cursor()
-                        cursor.execute("SELECT COUNT(*) FROM test")
-                        return True
-                    except:
-                        return False
-
-                def execute_query(self, query):
-                    return pd.DataFrame(
-                        [{"message": "최소 모드에서는 제한된 기능만 사용 가능합니다."}]
-                    ), {"success": True}
-
-            minimal_manager = MinimalManager()
-
-            if minimal_manager.test_connection():
-                st.success("✅ 최소 모드로 실행됩니다. (기능 제한)")
-                return minimal_manager
-
-        except Exception as minimal_e:
-            st.error(f"❌ 최소 모드 실행도 실패: {minimal_e}")
 
         return None
 
@@ -401,61 +314,87 @@ def get_dashboard_data(_db_manager):
         return pd.DataFrame(), pd.DataFrame()
 
     try:
+        port_in_query = """
+        SELECT 
+            FORMAT(TRT_DATE, 'yyyy-MM') as month,
+            COUNT(*) as count,
+            SUM(SETL_AMT) as amount,
+            BCHNG_COMM_CMPN_ID as operator
+        FROM PY_NP_SBSC_RMNY_TXN 
+        WHERE TRT_DATE >= DATEADD(month, -3, GETDATE())
+            AND NP_STTUS_CD IN ('OK', 'WD')
+        GROUP BY FORMAT(TRT_DATE, 'yyyy-MM'), BCHNG_COMM_CMPN_ID
+        ORDER BY month DESC
+        """
+
+        port_out_query = """
+        SELECT 
+            FORMAT(NP_TRMN_DATE, 'yyyy-MM') as month,
+            COUNT(*) as count,
+            SUM(PAY_AMT) as amount,
+            ACHNG_COMM_CMPN_ID as operator
+        FROM PY_NP_TRMN_RMNY_TXN 
+        WHERE NP_TRMN_DATE >= DATEADD(month, -3, GETDATE())
+            AND NP_TRMN_DTL_STTUS_VAL IN ('1', '3')
+        GROUP BY FORMAT(NP_TRMN_DATE, 'yyyy-MM'), ACHNG_COMM_CMPN_ID
+        ORDER BY month DESC
+            """
+
         # 데이터베이스 타입에 따른 쿼리 선택
-        if _db_manager.use_sample_data:
-            # SQLite 샘플 데이터용 쿼리
-            port_in_query = """
-            SELECT 
-                strftime('%Y-%m', TRT_DATE) as month,
-                COUNT(*) as count,
-                SUM(SETL_AMT) as amount,
-                BCHNG_COMM_CMPN_ID as operator
-            FROM PY_NP_SBSC_RMNY_TXN 
-            WHERE TRT_DATE >= date('now', '-4 months')
-                AND NP_STTUS_CD IN ('OK', 'WD')
-            GROUP BY strftime('%Y-%m', TRT_DATE), BCHNG_COMM_CMPN_ID
-            ORDER BY month DESC
-            """
+        # if _db_manager.use_sample_data:
+        #     # SQLite 샘플 데이터용 쿼리
+        #     port_in_query = """
+        #     SELECT
+        #         strftime('%Y-%m', TRT_DATE) as month,
+        #         COUNT(*) as count,
+        #         SUM(SETL_AMT) as amount,
+        #         BCHNG_COMM_CMPN_ID as operator
+        #     FROM PY_NP_SBSC_RMNY_TXN
+        #     WHERE TRT_DATE >= date('now', '-4 months')
+        #         AND NP_STTUS_CD IN ('OK', 'WD')
+        #     GROUP BY strftime('%Y-%m', TRT_DATE), BCHNG_COMM_CMPN_ID
+        #     ORDER BY month DESC
+        #     """
 
-            port_out_query = """
-            SELECT 
-                strftime('%Y-%m', NP_TRMN_DATE) as month,
-                COUNT(*) as count,
-                SUM(PAY_AMT) as amount,
-                BCHNG_COMM_CMPN_ID as operator
-            FROM PY_NP_TRMN_RMNY_TXN 
-            WHERE NP_TRMN_DATE >= date('now', '-4 months')
-                AND NP_TRMN_DTL_STTUS_VAL IN ('1', '3')
-            GROUP BY strftime('%Y-%m', NP_TRMN_DATE), BCHNG_COMM_CMPN_ID
-            ORDER BY month DESC
-            """
-        else:
-            # Azure SQL Database용 쿼리
-            port_in_query = """
-            SELECT 
-                FORMAT(TRT_DATE, 'yyyy-MM') as month,
-                COUNT(*) as count,
-                SUM(SETL_AMT) as amount,
-                COMM_CMPN_NM as operator
-            FROM PY_NP_SBSC_RMNY_TXN 
-            WHERE TRT_DATE >= DATEADD(month, -4, GETDATE())
-                AND TRT_STUS_CD IN ('OK', 'WD')
-            GROUP BY FORMAT(TRT_DATE, 'yyyy-MM'), COMM_CMPN_NM
-            ORDER BY month DESC
-            """
+        #     port_out_query = """
+        #     SELECT
+        #         strftime('%Y-%m', NP_TRMN_DATE) as month,
+        #         COUNT(*) as count,
+        #         SUM(PAY_AMT) as amount,
+        #         BCHNG_COMM_CMPN_ID as operator
+        #     FROM PY_NP_TRMN_RMNY_TXN
+        #     WHERE NP_TRMN_DATE >= date('now', '-4 months')
+        #         AND NP_TRMN_DTL_STTUS_VAL IN ('1', '3')
+        #     GROUP BY strftime('%Y-%m', NP_TRMN_DATE), BCHNG_COMM_CMPN_ID
+        #     ORDER BY month DESC
+        #     """
+        # else:
+        #     # Azure SQL Database용 쿼리
+        #     port_in_query = """
+        #     SELECT
+        #         FORMAT(TRT_DATE, 'yyyy-MM') as month,
+        #         COUNT(*) as count,
+        #         SUM(SETL_AMT) as amount,
+        #         COMM_CMPN_NM as operator
+        #     FROM PY_NP_SBSC_RMNY_TXN
+        #     WHERE TRT_DATE >= DATEADD(month, -4, GETDATE())
+        #         AND TRT_STUS_CD IN ('OK', 'WD')
+        #     GROUP BY FORMAT(TRT_DATE, 'yyyy-MM'), COMM_CMPN_NM
+        #     ORDER BY month DESC
+        #     """
 
-            port_out_query = """
-            SELECT 
-                FORMAT(SETL_TRT_DATE, 'yyyy-MM') as month,
-                COUNT(*) as count,
-                SUM(PAY_AMT) as amount,
-                COMM_CMPN_NM as operator
-            FROM PY_NP_TRMN_RMNY_TXN 
-            WHERE SETL_TRT_DATE >= DATEADD(month, -4, GETDATE())
-                AND NP_TRMN_DTL_STTUS_VAL IN ('1', '3')
-            GROUP BY FORMAT(SETL_TRT_DATE, 'yyyy-MM'), COMM_CMPN_NM
-            ORDER BY month DESC
-            """
+        #     port_out_query = """
+        #     SELECT
+        #         FORMAT(SETL_TRT_DATE, 'yyyy-MM') as month,
+        #         COUNT(*) as count,
+        #         SUM(PAY_AMT) as amount,
+        #         COMM_CMPN_NM as operator
+        #     FROM PY_NP_TRMN_RMNY_TXN
+        #     WHERE SETL_TRT_DATE >= DATEADD(month, -4, GETDATE())
+        #         AND NP_TRMN_DTL_STTUS_VAL IN ('1', '3')
+        #     GROUP BY FORMAT(SETL_TRT_DATE, 'yyyy-MM'), COMM_CMPN_NM
+        #     ORDER BY month DESC
+        #     """
 
         # 쿼리 실행
         port_in_df, _ = _db_manager.execute_query(port_in_query)
@@ -1337,9 +1276,19 @@ def display_sidebar(db_manager):
                             st.metric(
                                 "총 행 수", f"{table_info.get('row_count', 0):,}건"
                             )
-                            st.metric(
-                                "최신 데이터", table_info.get("latest_date", "N/A")
-                            )
+
+                            # 🔥 수정: latest_date를 문자열로 변환
+                            latest_date = table_info.get("latest_date")
+                            if latest_date is not None:
+                                # datetime.date 객체를 문자열로 변환
+                                if hasattr(latest_date, "strftime"):
+                                    latest_date_str = latest_date.strftime("%Y-%m-%d")
+                                else:
+                                    latest_date_str = str(latest_date)
+                            else:
+                                latest_date_str = "N/A"
+
+                            st.metric("최신 데이터", latest_date_str)
                             st.write(f"상태: {table_info.get('status', 'N/A')}")
 
             except Exception as e:

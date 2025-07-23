@@ -6,6 +6,10 @@ from datetime import datetime, timedelta
 import random
 import logging
 from typing import Optional, Dict, Any
+from sqlalchemy import text
+from datetime import datetime, timedelta
+import random
+from sqlalchemy import text
 
 
 class SampleDataManager:
@@ -23,37 +27,38 @@ class SampleDataManager:
         self.force_local = force_local
         self.logger = logging.getLogger(__name__)
 
-        # Azure 사용 가능 여부 확인 (연결 문자열이 실제로 있는지 확인)
-        self.use_sample_data = (
+        # 🔥 수정: use_azure 속성 초기화
+        self.use_azure = (
             not force_local
             and azure_config
             and azure_config.is_production_ready()
-            and hasattr(azure_config, "sql_connection_string")
-            and azure_config.sql_connection_string
-            and azure_config.sql_connection_string.strip()  # 빈 문자열 체크
+            and hasattr(azure_config, "get_database_connection_string")
+            and azure_config.get_database_connection_string()  # 실제 연결 문자열 확인
         )
 
-        if self.use_sample_data:
-            self.logger.info("Azure SQL Database 모드로 초기화")
+        # 🔥 추가: use_sample_data 속성 호환성을 위해 추가
+        self.use_sample_data = not self.use_azure
+
+        if self.use_azure and azure_config:
+            try:
+                from sqlalchemy import create_engine
+
+                connection_string = azure_config.get_database_connection_string()
+                if connection_string:
+                    self.sqlalchemy_engine = create_engine(
+                        connection_string, pool_timeout=20
+                    )
+                else:
+                    # 연결 문자열이 없으면 로컬 모드로 전환
+                    self.use_azure = False
+                    self.use_sample_data = True
+                    self.logger.warning("Azure 연결 문자열이 없어 로컬 모드로 전환")
+            except Exception as e:
+                self.logger.warning(f"SQLAlchemy 엔진 생성 실패: {e}")
+                self.use_azure = False
+                self.use_sample_data = True
         else:
             self.logger.info("로컬 SQLite 모드로 초기화")
-
-    def create_sample_database(self):
-        """샘플 데이터베이스 생성"""
-        try:
-            if self.use_sample_data:
-                return self._create_azure_database()
-            else:
-                return self._create_local_database()
-
-        except Exception as e:
-            self.logger.error(f"샘플 데이터베이스 생성 실패: {e}")
-            # Azure 실패시 로컬로 폴백
-            if self.use_sample_data:
-                self.logger.warning("Azure 연결 실패, 로컬 SQLite로 전환")
-                self.use_sample_data = False
-                return self._create_local_database()
-            raise e
 
     def _create_azure_database(self):
         """Azure SQL Database 샘플 데이터 생성"""
@@ -177,8 +182,6 @@ class SampleDataManager:
             """
 
             with self.sqlalchemy_engine.connect() as conn:
-                from sqlalchemy import text
-
                 result = conn.execute(text(check_query))
                 row = result.fetchone()
                 table_count = row[0] if row else 0
@@ -271,10 +274,6 @@ class SampleDataManager:
     def _generate_azure_sample_data(self):
         """Azure SQL Database 샘플 데이터 생성"""
         try:
-            from sqlalchemy import text
-            from datetime import datetime, timedelta
-            import random
-
             operators = ["KT", "SKT", "LGU+"]
 
             with self.sqlalchemy_engine.connect() as conn:
@@ -355,8 +354,8 @@ class SampleDataManager:
                         },
                     )
 
-                # 예치금 데이터 생성 (30건)
-                for i in range(30):
+                # 예치금 데이터 생성 (50건)
+                for i in range(50):
                     random_days = random.randint(0, 90)
                     deposit_date = (
                         datetime.now() - timedelta(days=random_days)
@@ -584,53 +583,6 @@ class SampleDataManager:
             "force_local": self.force_local,
         }
 
-    def get_sample_statistics(self, conn):
-        """샘플 데이터 통계 조회"""
-        stats = {}
-
-        try:
-            # 포트아웃 통계
-            port_out_query = """
-                SELECT 
-                    COUNT(*) as total_count,
-                    SUM(PAY_AMT) as total_amount,
-                    AVG(PAY_AMT) as avg_amount
-                FROM PY_NP_TRMN_RMNY_TXN
-                WHERE NP_TRMN_DTL_STTUS_VAL IN ('1', '3')
-            """
-            port_out_df = pd.read_sql_query(port_out_query, conn)
-            stats["port_out"] = port_out_df.iloc[0].to_dict()
-
-            # 포트인 통계
-            port_in_query = """
-                SELECT 
-                    COUNT(*) as total_count,
-                    SUM(SETL_AMT) as total_amount,
-                    AVG(SETL_AMT) as avg_amount
-                FROM PY_NP_SBSC_RMNY_TXN
-                WHERE NP_STTUS_CD IN ('OK', 'WD')
-            """
-            port_in_df = pd.read_sql_query(port_in_query, conn)
-            stats["port_in"] = port_in_df.iloc[0].to_dict()
-
-            # 예치금 통계
-            deposit_query = """
-                SELECT 
-                    COUNT(*) as total_count,
-                    SUM(DEPAZ_AMT) as total_amount,
-                    AVG(DEPAZ_AMT) as avg_amount
-                FROM PY_DEPAZ_BAS
-                WHERE DEPAZ_DIV_CD = '10'
-            """
-            deposit_df = pd.read_sql_query(deposit_query, conn)
-            stats["deposit"] = deposit_df.iloc[0].to_dict()
-
-            return stats
-
-        except Exception as e:
-            self.logger.error(f"통계 조회 실패: {e}")
-            return {}
-
     def cleanup_sample_data(self, conn):
         """샘플 데이터 정리 (Azure만 해당)"""
         if not self.use_sample_data:
@@ -658,20 +610,25 @@ class SampleDataManager:
             self.logger.error(f"샘플 데이터 정리 실패: {e}")
 
 
-# 기존 함수와의 호환성을 위한 래퍼 함수
-def create_sample_database(azure_config=None, force_local: bool = False):
-    """
-    샘플 데이터베이스 생성 (기존 함수와 호환)
-
-    Args:
-        azure_config: Azure 설정 (None이면 로컬 모드)
-        force_local: 강제로 로컬 SQLite 사용
-
-    Returns:
-        데이터베이스 연결 객체
-    """
-    manager = SampleDataManager(azure_config, force_local)
-    return manager.create_sample_database()
+def create_sample_database(self):
+    """샘플 데이터베이스 생성 (인스턴스 메서드)"""
+    try:
+        if self.use_azure:
+            # Azure SQL Database 모드
+            self.logger.info("Azure SQL Database 샘플 데이터 생성 중...")
+            return self._create_azure_database()
+        else:
+            # 로컬 SQLite 모드
+            self.logger.info("로컬 SQLite 샘플 데이터 생성 중...")
+            return self._create_local_database()
+    except Exception as e:
+        self.logger.error(f"샘플 데이터베이스 생성 실패: {e}")
+        # Azure 실패시 로컬로 폴백
+        if self.use_azure:
+            self.logger.warning("Azure 연결 실패, 로컬 SQLite로 전환")
+            self.use_azure = False
+            return self._create_local_database()
+        raise e
 
 
 def get_sample_statistics(conn):

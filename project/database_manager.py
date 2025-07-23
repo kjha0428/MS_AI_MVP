@@ -10,18 +10,16 @@ from typing import Optional, Dict, Any, Tuple
 from contextlib import contextmanager
 from azure_config import AzureConfig
 from sample_data import SampleDataManager
+from sqlalchemy import text
+from sample_data import create_sample_database
 
 
 class DatabaseManager:
     """데이터베이스 연결 및 쿼리 실행 관리 클래스"""
 
-    def __init__(self, azure_config: AzureConfig, use_sample_data=False):
+    def __init__(self, azure_config: AzureConfig, use_sample_data: bool = False):
         """
         데이터베이스 매니저 초기화
-
-        Args:
-            azure_config: Azure 설정 객체
-            use_sample_data: 샘플 데이터 사용 여부 (True면 SQLite, False면 Azure)
         """
         self.azure_config = azure_config
         self.use_sample_data = use_sample_data
@@ -30,7 +28,9 @@ class DatabaseManager:
         # 연결 설정
         self.connection_string = None
         self.sample_connection = None
-        self.sqlalchemy_engine = None  # 🔥 추가: SQLAlchemy 엔진 추가
+        self.sqlalchemy_engine = None
+
+        # 🔥 제거: sample_manager 속성 제거 (필요시 임시로만 생성)
 
         # 성능 설정
         self.max_execution_time = 30
@@ -58,15 +58,13 @@ class DatabaseManager:
         try:
             # sample_data 모듈 동적 임포트
             try:
-                from sample_data import create_sample_database
-
-                self.sample_connection = create_sample_database()
+                self.sample_connection = create_sample_database(
+                    self.azure_config, force_local=False
+                )
                 self.logger.info("✅ 샘플 데이터베이스 연결 성공")
             except ImportError as e:
                 self.logger.error(f"sample_data 모듈 임포트 실패: {e}")
                 # 간단한 메모리 SQLite 생성
-                import sqlite3
-
                 self.sample_connection = sqlite3.connect(
                     ":memory:", check_same_thread=False
                 )
@@ -150,20 +148,38 @@ class DatabaseManager:
     def _initialize_azure_connection(self):
         """Azure SQL Database 연결 초기화"""
         try:
-            # 🔥 수정: azure_config에서 직접 연결 문자열 가져오기
+            # Azure 연결 문자열 가져오기
             self.connection_string = self.azure_config.get_database_connection_string()
             if not self.connection_string:
                 raise ValueError("데이터베이스 연결 문자열을 가져올 수 없습니다")
 
-            # 🔥 수정: SQLAlchemy 엔진 생성
+            # SQLAlchemy 엔진 생성
             self._create_sqlalchemy_engine()
 
             # 연결 테스트
             if self.test_connection():
                 self.logger.info("✅ Azure SQL Database 연결 성공")
 
-                # 🔥 추가: 테이블 존재 확인 및 생성
-                self.ensure_tables_exist()
+                # 🔥 수정: SampleDataManager의 올바른 메서드 사용
+                try:
+                    from sample_data import SampleDataManager
+
+                    self.logger.info("Azure 테이블 및 샘플 데이터 설정 중...")
+
+                    # SampleDataManager 인스턴스 생성
+                    sample_manager = SampleDataManager(
+                        self.azure_config, force_local=False
+                    )
+
+                    # 🔥 수정: ensure_tables_exist 메서드 사용
+                    sample_manager.ensure_tables_exist()
+
+                    self.logger.info("✅ Azure 테이블 설정 완료")
+
+                except Exception as table_error:
+                    self.logger.warning(
+                        f"테이블 생성 중 오류 (무시하고 계속): {table_error}"
+                    )
 
             else:
                 raise Exception("Azure 연결 테스트 실패")
@@ -188,28 +204,46 @@ class DatabaseManager:
                 database_name = result.fetchone()[0]
                 self.logger.info(f"현재 데이터베이스: {database_name}")
 
-                # 권한 확인
-                result = conn.execute(
-                    text(
-                        """
-                    SELECT 
-                        p.permission_name,
-                        p.state_desc AS permission_state
-                    FROM sys.database_permissions p
-                    LEFT JOIN sys.objects o ON p.major_id = o.object_id
-                    LEFT JOIN sys.database_principals pr ON p.grantee_principal_id = pr.principal_id
-                    WHERE pr.name = CURRENT_USER OR pr.name = 'public'
-                """
-                    )
-                )
-
-                permissions = result.fetchall()
-                self.logger.info(f"사용자 권한: {len(permissions)}개")
-                for perm in permissions[:5]:  # 처음 5개만 로그
-                    self.logger.info(f"  - {perm[0]}: {perm[1]}")
-
         except Exception as e:
             self.logger.warning(f"권한 확인 실패: {e}")
+
+    def _ensure_azure_tables_with_sample_manager(self):
+        """기존 create_sample_database 함수를 사용하여 Azure 테이블 설정"""
+        try:
+            self.logger.info("샘플 데이터 함수를 사용하여 Azure 테이블 설정 중...")
+
+            # 🔥 수정: create_sample_database 함수 직접 사용 (Azure 설정과 force_local=False)
+            from sample_data import create_sample_database
+
+            azure_conn = create_sample_database(self.azure_config, force_local=False)
+
+            if azure_conn:
+                # 연결 테스트
+                if hasattr(azure_conn, "cursor"):
+                    # pymssql 연결인 경우
+                    cursor = azure_conn.cursor()
+                    cursor.execute("SELECT COUNT(*) FROM PY_NP_SBSC_RMNY_TXN")
+                    count = cursor.fetchone()[0]
+                    azure_conn.close()  # 연결 정리
+                else:
+                    # SQLAlchemy 연결인 경우
+                    from sqlalchemy import text
+
+                    with azure_conn.connect() as conn:
+                        result = conn.execute(
+                            text("SELECT COUNT(*) FROM PY_NP_SBSC_RMNY_TXN")
+                        )
+                        count = result.fetchone()[0]
+
+                self.logger.info(
+                    f"✅ Azure 테이블 설정 완료 - 포트인 데이터: {count}건"
+                )
+            else:
+                raise Exception("Azure 데이터베이스 생성 실패")
+
+        except Exception as e:
+            self.logger.error(f"샘플 데이터 함수를 통한 테이블 설정 실패: {e}")
+            raise e
 
     def _create_sqlalchemy_engine(self):
         """SQLAlchemy 엔진 생성 - connection_string 직접 사용"""
@@ -437,28 +471,16 @@ class DatabaseManager:
         try:
             with self.get_connection() as conn:
                 # 샘플 데이터와 Azure 데이터베이스에서 다른 테이블명 사용
-                if self.use_sample_data:  # SQLite 샘플 데이터
-                    tables = [
-                        "PY_NP_TRMN_RMNY_TXN",
-                        "PY_NP_SBSC_RMNY_TXN",
-                        "PY_DEPAZ_BAS",
-                    ]
-                    date_columns = {
-                        "PY_NP_TRMN_RMNY_TXN": "NP_TRMN_DATE",
-                        "PY_NP_SBSC_RMNY_TXN": "TRT_DATE",
-                        "PY_DEPAZ_BAS": "RMNY_DATE",
-                    }
-                else:  # Azure SQL Database
-                    tables = [
-                        "PY_NP_TRMN_RMNY_TXN",
-                        "PY_NP_SBSC_RMNY_TXN",
-                        "PY_DEPAZ_BAS",
-                    ]
-                    date_columns = {
-                        "PY_NP_TRMN_RMNY_TXN": "SETL_TRT_DATE",
-                        "PY_NP_SBSC_RMNY_TXN": "TRT_DATE",
-                        "PY_DEPAZ_BAS": "DPST_DT",
-                    }
+                tables = [
+                    "PY_NP_TRMN_RMNY_TXN",
+                    "PY_NP_SBSC_RMNY_TXN",
+                    "PY_DEPAZ_BAS",
+                ]
+                date_columns = {
+                    "PY_NP_TRMN_RMNY_TXN": "NP_TRMN_DATE",
+                    "PY_NP_SBSC_RMNY_TXN": "TRT_DATE",
+                    "PY_DEPAZ_BAS": "RMNY_DATE",
+                }
 
                 for table in tables:
                     try:
@@ -474,7 +496,7 @@ class DatabaseManager:
                         if check_result.empty:
                             table_info[table] = {
                                 "row_count": 0,
-                                "latest_date": None,
+                                "latest_date": "N/A",  # 🔥 수정: 문자열로 설정
                                 "status": "❌ 테이블 없음",
                             }
                             continue
@@ -493,20 +515,29 @@ class DatabaseManager:
                                 date_query = f"SELECT MAX({date_column}) as latest_date FROM {table}"
 
                             date_result = pd.read_sql_query(date_query, conn)
-                            latest_date = date_result.iloc[0]["latest_date"]
+                            latest_date_raw = date_result.iloc[0]["latest_date"]
+
+                            # 🔥 수정: 날짜를 문자열로 변환
+                            if latest_date_raw is not None:
+                                if hasattr(latest_date_raw, "strftime"):
+                                    latest_date = latest_date_raw.strftime("%Y-%m-%d")
+                                else:
+                                    latest_date = str(latest_date_raw)
+                            else:
+                                latest_date = "N/A"
                         else:
                             latest_date = "N/A"
 
                         table_info[table] = {
                             "row_count": row_count,
-                            "latest_date": latest_date,
+                            "latest_date": latest_date,  # 🔥 수정: 이미 문자열로 변환됨
                             "status": "✅ 활성",
                         }
 
                     except Exception as e:
                         table_info[table] = {
                             "row_count": 0,
-                            "latest_date": None,
+                            "latest_date": "N/A",  # 🔥 수정: 문자열로 설정
                             "status": f"❌ 오류: {str(e)[:50]}...",
                         }
 
@@ -595,10 +626,10 @@ class DatabaseManager:
                         SUBSTRING(TEL_NO, 1, 3) + '****' + RIGHT(TEL_NO, 4) as masked_phone,
                         SVC_CONT_ID,
                         PAY_AMT,
-                        COMM_CMPN_NM as operator,
-                        SETL_TRT_DATE as transaction_date
+                        ACHNG_COMM_CMPN_ID as operator,
+                        NP_TRMN_DATE as transaction_date
                     FROM {table_name}
-                    ORDER BY SETL_TRT_DATE DESC
+                    ORDER BY NP_TRMN_DATE DESC
                     """
                 elif table_name == "PY_NP_SBSC_RMNY_TXN":
                     sample_query = f"""
@@ -606,7 +637,7 @@ class DatabaseManager:
                         SUBSTRING(TEL_NO, 1, 3) + '****' + RIGHT(TEL_NO, 4) as masked_phone,
                         SVC_CONT_ID,
                         SETL_AMT,
-                        COMM_CMPN_NM as operator,
+                        BCHNG_COMM_CMPN_ID as operator,
                         TRT_DATE as transaction_date
                     FROM {table_name}
                     ORDER BY TRT_DATE DESC
@@ -615,11 +646,11 @@ class DatabaseManager:
                     sample_query = f"""
                     SELECT TOP {limit}
                         SVC_CONT_ID,
+                        BILL_ACC_ID,
                         DEPAZ_AMT,
-                        COMM_CMPN_NM as operator,
-                        DPST_DT as deposit_date
+                        RMNY_DATE as deposit_date
                     FROM {table_name}
-                    ORDER BY DPST_DT DESC
+                    ORDER BY RMNY_DATE DESC
                     """
 
             df, _ = self.execute_query(sample_query)
