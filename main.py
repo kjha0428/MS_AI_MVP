@@ -1,6 +1,10 @@
 # main.py - 번호이동정산 AI 분석 시스템 메인 애플리케이션 (Azure SQL Database 연동)
 import streamlit as st
 import os
+from dotenv import load_dotenv
+
+load_dotenv()
+
 import pandas as pd
 import plotly.express as px
 import plotly.graph_objects as go
@@ -22,16 +26,12 @@ import json
 from database_manager import DatabaseManagerFactory
 from azure_config import get_azure_config
 
-from dotenv import load_dotenv
-
 # 샘플 데이터 임포트
 from sample_data import create_sample_database
 
 from sql_generator import SQLGenerator
 
 # 환경변수 로드
-
-load_dotenv()
 
 OPENAI_AVAILABLE = True
 
@@ -791,16 +791,16 @@ def generate_rule_based_sql_query(user_input, is_azure=True):
     date_func = {
         "now_minus_months": lambda months: (
             f"DATEADD(month, -{months}, GETDATE())"
-            #if is_azure
-            #else f"date('now', '-{months} months')"
+            # if is_azure
+            # else f"date('now', '-{months} months')"
         ),
         "format_month": lambda col: (
-            f"FORMAT({col}, 'yyyy-MM')" #if is_azure else f"strftime('%Y-%m', {col})"
+            f"FORMAT({col}, 'yyyy-MM')"  # if is_azure else f"strftime('%Y-%m', {col})"
         ),
         "substr_phone": lambda col: (
             f"LEFT({col}, 3) + '****' + RIGHT({col}, 4)"
-            #if is_azure
-            #else f"SUBSTR({col}, 1, 3) || '****' || SUBSTR({col}, -4)"
+            # if is_azure
+            # else f"SUBSTR({col}, 1, 3) || '****' || SUBSTR({col}, -4)"
         ),
     }
 
@@ -808,13 +808,13 @@ def generate_rule_based_sql_query(user_input, is_azure=True):
     # if "월별" in user_input_lower or "추이" in user_input_lower:
     #     if "포트인" in user_input_lower:
     #         return f"""
-    #         SELECT 
+    #         SELECT
     #             {date_func['format_month']('TRT_DATE')} as 번호이동월,
     #             BCHNG_COMM_CMPN_ID as 전사업자,
     #             COUNT(*) as 총건수,
     #             SUM(SETL_AMT) as 총금액,
     #             {'ROUND(AVG(SETL_AMT), 0)' if not is_azure else 'CAST(AVG(SETL_AMT) AS INT)'} as 정산금액평균
-    #         FROM PY_NP_SBSC_RMNY_TXN 
+    #         FROM PY_NP_SBSC_RMNY_TXN
     #         WHERE TRT_DATE >= {date_func['now_minus_months'](6)}
     #             AND NP_STTUS_CD IN ('OK', 'WD')
     #         GROUP BY {date_func['format_month']('TRT_DATE')}, BCHNG_COMM_CMPN_ID
@@ -822,14 +822,14 @@ def generate_rule_based_sql_query(user_input, is_azure=True):
     #         """
     #     elif "포트아웃" in user_input_lower:
     #         return f"""
-    #         SELECT 
+    #         SELECT
     #             {date_func['format_month']('NP_TRMN_DATE')} as 번호이동월,
     #             BCHNG_COMM_CMPN_ID as 전사업자,
     #             COUNT(*) as 총건수,
     #             SUM(PAY_AMT) as 총금액,
     #             {'ROUND(AVG(PAY_AMT), 0)' if not is_azure else 'CAST(AVG(PAY_AMT) AS INT)'} as 정산금액평균
-    #         FROM PY_NP_TRMN_RMNY_TXN 
-    #         WHERE NP_TRMN_DATE IS NOT NULL 
+    #         FROM PY_NP_TRMN_RMNY_TXN
+    #         WHERE NP_TRMN_DATE IS NOT NULL
     #             AND NP_TRMN_DATE >= {date_func['now_minus_months'](4)}
     #             AND NP_TRMN_DTL_STTUS_VAL IN ('1', '3')
     #         GROUP BY {date_func['format_month']('NP_TRMN_DATE')}, BCHNG_COMM_CMPN_ID
@@ -919,7 +919,7 @@ def generate_rule_based_sql_query(user_input, is_azure=True):
             )
 
         # return f"""
-        # SELECT 
+        # SELECT
         #     BCHNG_COMM_CMPN_ID as 사업자,
         #     'PORT_IN' as 번호이동타입,
         #     COUNT(*) as 번호이동건수,
@@ -933,7 +933,7 @@ def generate_rule_based_sql_query(user_input, is_azure=True):
         #     {operator_filter}
         # GROUP BY BCHNG_COMM_CMPN_ID
         # UNION ALL
-        # SELECT 
+        # SELECT
         #     BCHNG_COMM_CMPN_ID as 사업자,
         #     'PORT_OUT' as 번호이동타입,
         #     COUNT(*) as 번호이동건수,
@@ -942,7 +942,7 @@ def generate_rule_based_sql_query(user_input, is_azure=True):
         #     {'MIN(NP_TRMN_DATE)' if not is_azure else 'MIN(CAST(NP_TRMN_DATE AS DATE))'} as 최초일자,
         #     {'MAX(NP_TRMN_DATE)' if not is_azure else 'MAX(CAST(NP_TRMN_DATE AS DATE))'} as 최신일자
         # FROM PY_NP_TRMN_RMNY_TXN
-        # WHERE NP_TRMN_DATE IS NOT NULL 
+        # WHERE NP_TRMN_DATE IS NOT NULL
         #     AND NP_TRMN_DATE >= {date_func['now_minus_months'](3)}
         #     AND NP_TRMN_DTL_STTUS_VAL IN ('1', '3')
         #     {operator_filter}
@@ -984,7 +984,7 @@ def generate_rule_based_sql_query(user_input, is_azure=True):
     # # 4. 예치금 조회
     # if "예치금" in user_input_lower:
     #     return f"""
-    #     SELECT 
+    #     SELECT
     #         {date_func['format_month']('RMNY_DATE')} as 수납월,
     #         COUNT(*) as 총건수,
     #         SUM(DEPAZ_AMT) as 총금액,
@@ -1000,7 +1000,7 @@ def generate_rule_based_sql_query(user_input, is_azure=True):
     #     GROUP BY {date_func['format_month']('RMNY_DATE')}, DEPAZ_DIV_CD, RMNY_METH_CD
     #     ORDER BY 수납월 DESC
     #     """
-        # 4. 예치금 조회
+    # 4. 예치금 조회
     if "예치금" in user_input_lower:
         return f"""
         SELECT 
@@ -1294,17 +1294,19 @@ def display_chatbot(db_manager):
         """안전한 SQL 생성기 초기화"""
         try:
             azure_config = get_azure_config()
-            
+
             # Azure OpenAI 설정 확인
             if not azure_config.openai_api_key or not azure_config.openai_endpoint:
-                st.warning("⚠️ Azure OpenAI 설정이 완전하지 않습니다. 규칙 기반 쿼리만 사용됩니다.")
+                st.warning(
+                    "⚠️ Azure OpenAI 설정이 완전하지 않습니다. 규칙 기반 쿼리만 사용됩니다."
+                )
                 return None
-            
+
             # SQLGenerator 생성 시도
             sql_generator = SQLGenerator(azure_config)
             st.success("✅ Azure OpenAI SQL 생성기가 준비되었습니다!")
             return sql_generator
-            
+
         except Exception as e:
             st.error(f"❌ SQL 생성기 초기화 실패: {e}")
             st.info("💡 규칙 기반 쿼리 생성기를 사용합니다.")
@@ -1314,7 +1316,7 @@ def display_chatbot(db_manager):
     if "sql_generator" not in st.session_state:
         with st.spinner("🔧 AI 쿼리 생성기를 초기화하고 있습니다..."):
             st.session_state.sql_generator = initialize_sql_generator()
-    
+
     # SQL 생성기 상태 표시
     if st.session_state.sql_generator is None:
         st.info("🔧 현재 규칙 기반 쿼리 생성기를 사용 중입니다.")
@@ -1350,7 +1352,7 @@ def display_chatbot(db_manager):
             "포트인 데이터 중 전사업자가 SKT인 데이터 저저번달이랑 저번달 비교해서 보여줘",
             "포트아웃 한 데이터 중 전월 대비 증가한 사업자 조회하는 쿼리 보여줘",
             "25.05월에 포트인 데이터 급격하게 증가했는데,  25.04, 25.06월 데이터랑 비교해줘",
-            "예치금 데이터 잘 쌓였는지 포트아웃 데이터 확인해서 검증해줘"
+            "예치금 데이터 잘 쌓였는지 포트아웃 데이터 확인해서 검증해줘",
         ]
         for i, example in enumerate(examples):
             if st.button(f"💬 {example}", key=f"example_{i}"):
@@ -1389,13 +1391,15 @@ def display_chatbot(db_manager):
                 # 🔥 수정: SQL 생성 방식 개선 - 안전한 언패킹
                 sql_query = None
                 is_ai_generated = False
-                
+
                 # 1. AI 생성기가 있으면 AI로 시도
                 if st.session_state.sql_generator is not None:
                     try:
                         # 🔥 수정: 안전한 언패킹 처리
-                        ai_result = st.session_state.sql_generator.generate_sql(user_input)
-                        
+                        ai_result = st.session_state.sql_generator.generate_sql(
+                            user_input
+                        )
+
                         if ai_result is not None:
                             is_ai_generated = True
                             # 튜플인지 확인
@@ -1408,20 +1412,24 @@ def display_chatbot(db_manager):
                                     sql_query = ai_result
                                     st.info("🤖 Azure OpenAI로 쿼리를 생성했습니다.")
                                 else:
-                                    raise ValueError(f"예상치 못한 반환 타입: {type(ai_result)}")
+                                    raise ValueError(
+                                        f"예상치 못한 반환 타입: {type(ai_result)}"
+                                    )
                         else:
                             raise ValueError("AI 생성기가 None을 반환했습니다.")
-                            
+
                     except Exception as ai_error:
                         st.warning(f"⚠️ AI 쿼리 생성 실패: {ai_error}")
                         sql_query = None
-                
+
                 # 2. AI 실패 시 또는 AI가 없으면 규칙 기반으로 폴백
                 if sql_query is None:
                     st.info("🔧 규칙 기반 쿼리 생성기를 사용합니다.")
                     sql_query = generate_rule_based_sql_query(
-                        user_input, 
-                        is_azure=(not db_manager.use_sample_data if db_manager else True)
+                        user_input,
+                        is_azure=(
+                            not db_manager.use_sample_data if db_manager else True
+                        ),
                     )
                     is_ai_generated = False
 
@@ -1431,9 +1439,15 @@ def display_chatbot(db_manager):
 
                     # 설명 생성 (AI 생성기가 있을 때만)
                     explanation = ""
-                    if st.session_state.sql_generator and hasattr(st.session_state.sql_generator, "get_query_explanation"):
+                    if st.session_state.sql_generator and hasattr(
+                        st.session_state.sql_generator, "get_query_explanation"
+                    ):
                         try:
-                            explanation = st.session_state.sql_generator.get_query_explanation(sql_query)
+                            explanation = (
+                                st.session_state.sql_generator.get_query_explanation(
+                                    sql_query
+                                )
+                            )
                         except Exception as exp_error:
                             explanation = f"쿼리 설명 생성 실패: {exp_error}"
 
@@ -1471,7 +1485,9 @@ def display_chatbot(db_manager):
 
                         col1, col2, col3 = st.columns(3)
                         with col1:
-                            st.metric("실행 시간", f"{metadata['execution_time']:.3f}초")
+                            st.metric(
+                                "실행 시간", f"{metadata['execution_time']:.3f}초"
+                            )
                         with col2:
                             st.metric("결과 행수", f"{metadata['row_count']:,}행")
                         with col3:
@@ -1513,14 +1529,18 @@ def display_chatbot(db_manager):
             except Exception as e:
                 st.error(f"❌ 쿼리 실행 중 오류가 발생했습니다: {str(e)}")
                 st.info("💡 다른 방식으로 질문해보시거나 예시 쿼리를 사용해보세요.")
-                
+
                 # 🔥 추가: 디버깅 정보
                 with st.expander("🐛 디버깅 정보"):
                     st.code(f"오류 타입: {type(e).__name__}")
                     st.code(f"오류 메시지: {str(e)}")
-                    st.code(f"SQL 생성기 상태: {st.session_state.sql_generator is not None}")
+                    st.code(
+                        f"SQL 생성기 상태: {st.session_state.sql_generator is not None}"
+                    )
                     if st.session_state.sql_generator:
-                        st.code(f"SQL 생성기 타입: {type(st.session_state.sql_generator)}")
+                        st.code(
+                            f"SQL 생성기 타입: {type(st.session_state.sql_generator)}"
+                        )
 
     # 대화 히스토리 표시 (기존 코드 그대로 유지)
     if st.session_state.conversation_history:
