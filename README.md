@@ -39,7 +39,7 @@ Azure OpenAI와 Streamlit을 활용하여 **번호이동정산 데이터 분석 
 [실시간 대시보드] ← [결과 출력] → [챗봇 인터페이스]
 
 ```
-![image.png](attachment:3f43e2e6-e672-4509-b6c1-b927719b10eb:image.png)
+<img width="1616" height="409" alt="시스템 아키텍처" src="https://github.com/user-attachments/assets/a5c6e7f0-db91-4b5f-b207-3a71cf8331fb" />
 
 ## 🎯 주요 기능
 
