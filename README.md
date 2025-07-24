@@ -139,4 +139,5 @@ Azure OpenAI와 Streamlit을 활용하여 **번호이동정산 데이터 분석 
 ---
 
 🔧 기술 지원: Azure OpenAI, Azure SQL Database, Azure App Service, Azure Streamlit, Python
+
 📊 결과물: 번호이동정산 AI 분석 시스템 웹 애플리케이션
