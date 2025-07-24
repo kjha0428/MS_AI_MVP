@@ -19,7 +19,6 @@ Azure OpenAI와 Streamlit을 활용하여 **번호이동정산 데이터 분석 
 - **Azure OpenAI Service (GPT-4)**: 자연어 → SQL 쿼리 변환
 - **Azure SQL Database**: 번호이동정산 데이터 저장 및 조회
 - **Azure App Service**: Streamlit 웹 애플리케이션 호스팅
-- **Azure Key Vault**: 데이터베이스 연결 정보 및 API 키 보안 관리
 
 ### 기술 스택
 
@@ -77,8 +76,6 @@ Azure OpenAI와 Streamlit을 활용하여 **번호이동정산 데이터 분석 
 - 반응형 웹 인터페이스로 다양한 디바이스 지원
 
 ### 보안 및 권한 관리
-
-- Azure Key Vault를 통한 민감 정보 보호
 - 읽기 전용 데이터베이스 연결로 데이터 안전성 확보
 - 쿼리 실행 전 검증 단계 적용
 
