@@ -1,3 +1,5 @@
+ktds17webapp001-fqefc7hbe6bcctg5.centralus-01.azurewebsites.net
+
 # 📊 AZURE 기반 생성형 AI 프로젝트 제안서
 
 # ✅ 프로젝트 제목: 자연어 기반 번호이동정산 데이터 분석 쿼리 생성 시스템
